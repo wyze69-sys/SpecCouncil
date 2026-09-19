@@ -50,7 +50,10 @@ not start. Hermes verifies every result before releasing its successor packet.
   every applied migration; changed applied SQL fails closed.
 - Applied migrations are never edited. Corrections are new migrations.
 - Write-critical operations use a dedicated connection and explicit
-  `BEGIN IMMEDIATE`; do not assume `sql.Tx` is immediate.
+  `BEGIN IMMEDIATE`; do not assume `sql.Tx` is immediate. P1B migration
+  atomicity is the sole phase exception: it may use an ordinary `sql.Tx` only
+  for migration SQL plus metadata, because P1C owns the reusable immediate
+  transaction boundary.
 - The reusable immediate-transaction boundary retries only SQLite busy/locked
   failures, at most configured `DB_RETRIES`, then returns a typed
   persistence-unavailable error. Never retry conflicts, validation, not-found,

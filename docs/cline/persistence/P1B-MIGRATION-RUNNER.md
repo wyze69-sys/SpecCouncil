@@ -51,8 +51,10 @@ strictly required and covered by a focused regression test.
 
 ## Exact migration manifest rules
 
-The embedded migration filesystem contains top-level migration SQL files only.
-The exact accepted filename pattern is:
+The embedded migration filesystem includes the complete top-level migration tree.
+Production must embed the whole `migrations` directory (not only `*.sql`) and
+walk it recursively so a non-empty nested directory cannot be hidden by an
+include pattern. Test filesystems use the same complete-tree traversal.
 
 ```text
 ^[0-9]{3}_[a-z][a-z0-9_]*\.sql$
@@ -73,10 +75,24 @@ Rules:
 - checksum is SHA-256 over the exact embedded SQL bytes, without trimming,
   newline conversion, or Unicode normalization.
 
-The metadata migration itself is `001_migration_metadata.sql`. It creates only
-migration metadata, not SpecCouncil product tables. Its table must contain at
-least: numeric version, exact migration name, checksum, and UTC applied time.
-Choose stable SQL types and document the representation in code/tests.
+The metadata migration is `001_migration_metadata.sql`. It creates only the
+following exact runner-owned table, not SpecCouncil product tables:
+
+```sql
+CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL UNIQUE,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL
+);
+```
+
+The runner must validate this exact column order, declared types, NOT NULL flags,
+primary-key flag, and uniqueness before trusting an existing metadata table.
+Checksum is lowercase hexadecimal SHA-256. `applied_at` is UTC RFC3339Nano text
+with a `Z` suffix. Extra columns, missing columns, wrong types, nullable required
+columns, or wrong constraints fail closed. The metadata migration itself is
+applied as the first migration and is recorded in this table.
 
 ## Runner contract
 
@@ -96,14 +112,25 @@ Provide a narrow package-internal runner callable by later SQLite packets. It mu
    fails. A failed migration must not partially change the database.
 7. Reject duplicate versions, malformed names, empty SQL, invalid metadata, and
    checksum/name/version mismatches with errors that identify the operation but
-   never expose credentials, DSNs, or raw secret-bearing SQL.
-8. Respect context cancellation before work and during database operations. Do not
-   turn cancellation into a successful migration.
-9. Use ordinary `database/sql` transactions only for migration atomicity. Do not
-   claim this implements explicit `BEGIN IMMEDIATE` or bounded busy retry; P1C
-   owns that write boundary.
-10. Keep migration input injectable through `fs.FS` for tests. Production uses
-    `go:embed`. Do not add an exported reset hook or production test mode.
+   never expose credentials, DSNs, or secret-bearing SQL.
+8. Respect context cancellation at the defined operation boundary: check before
+   opening a transaction, before each SQL statement, and immediately before
+   calling `Commit`. If cancellation is observed before `Commit` starts, roll back
+   and return `context.Canceled`/`context.DeadlineExceeded`. `Commit` has no
+   context parameter, so once `Commit` starts its result is authoritative: a
+   successful commit is reported as success even if cancellation arrives during
+   or immediately after the commit; a failed commit is reported as failure and
+   must not be reported as success. Never claim rollback can undo a committed
+   migration.
+9. Keep migration input injectable through `fs.FS` for tests. Production uses
+   `go:embed` of the complete migration directory. Do not add an exported reset
+   hook or production test mode.
+10. Use ordinary `database/sql` transactions only for migration atomicity. This
+   is an explicit P1B exception to the global write-critical transaction rule:
+   P1C owns the reusable dedicated-connection `BEGIN IMMEDIATE` boundary. P1B
+   must not claim to implement it.
+11. Keep raw migration SQL out of errors; errors may identify version/name and
+   operation but never expose credentials, DSNs, or secret-bearing SQL.
 
 Migration SQL must be executed as SQL bytes, not reconstructed from parsed text.
 Do not use `CREATE TABLE IF NOT EXISTS` to hide checksum or metadata mismatches.
@@ -125,7 +152,9 @@ or equivalent injected filesystems for manifest tests. Cover:
 - applied metadata whose version is missing from the current manifest fails closed;
 - a pending migration failure leaves neither its schema effect nor metadata row;
 - metadata insert failure rolls back the migration effect;
-- context cancellation is returned and does not report success;
+- context cancellation before work and before commit returns cancellation without
+  claiming success; cancellation after commit starts follows the defined commit
+  boundary and a successful commit remains successful;
 - no product table, session table, role table, snapshot table, or finding table is
   created by P1B;
 - two separate databases do not share migration state.
