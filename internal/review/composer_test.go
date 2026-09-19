@@ -1,105 +1,297 @@
 package review
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
 )
 
-func rows(statuses ...domain.RoleStatus) []RoleRow {
-	out := make([]RoleRow, 0, len(statuses))
-	for i, s := range statuses {
-		out = append(out, RoleRow{Role: domain.Roles[i], Status: s})
-	}
-	return out
+func rowComplete(r domain.Role) RoleRow {
+	return RoleRow{Role: r, Status: domain.RoleComplete}
 }
 
-// AC-01: all four roles valid.
-func TestAllRolesCompleteIsComplete(t *testing.T) {
-	v, err := Compose(ComposerInput{Roles: rows(
-		domain.RoleComplete, domain.RoleComplete, domain.RoleComplete, domain.RoleComplete)})
-	if err != nil {
-		t.Fatalf("Compose: %v", err)
+func rowFailed(r domain.Role) RoleRow {
+	return RoleRow{Role: r, Status: domain.RoleFailed}
+}
+
+func rowInterrupted(r domain.Role, cause domain.InterruptCause) RoleRow {
+	return RoleRow{Role: r, Status: domain.RoleInterrupted, InterruptCause: cause}
+}
+
+func TestComposeVerdictTable(t *testing.T) {
+	cases := []struct {
+		name           string
+		rows           []RoleRow
+		wantStatus     domain.SessionStatus
+		wantReason     domain.TerminalReason
+		wantCompleted  int
+		wantIncomplete int
+	}{
+		{
+			name: "four complete",
+			rows: []RoleRow{
+				rowComplete(domain.RoleRequirements),
+				rowComplete(domain.RoleArchitecture),
+				rowComplete(domain.RoleQA),
+				rowComplete(domain.RoleSecurity),
+			},
+			wantStatus:     domain.SessionComplete,
+			wantReason:     domain.ReasonAllRolesComplete,
+			wantCompleted:  4,
+			wantIncomplete: 0,
+		},
+		{
+			name: "three complete plus failed",
+			rows: []RoleRow{
+				rowComplete(domain.RoleRequirements),
+				rowComplete(domain.RoleArchitecture),
+				rowComplete(domain.RoleQA),
+				rowFailed(domain.RoleSecurity),
+			},
+			wantStatus:     domain.SessionPartial,
+			wantReason:     domain.ReasonRoleFailures,
+			wantCompleted:  3,
+			wantIncomplete: 1,
+		},
+		{
+			name: "one complete plus process restart",
+			rows: []RoleRow{
+				rowComplete(domain.RoleRequirements),
+				rowInterrupted(domain.RoleArchitecture, domain.CauseProcessRestart),
+				rowFailed(domain.RoleQA),
+				rowFailed(domain.RoleSecurity),
+			},
+			wantStatus:     domain.SessionPartial,
+			wantReason:     domain.ReasonProcessRestart,
+			wantCompleted:  1,
+			wantIncomplete: 3,
+		},
+		{
+			name: "one complete plus deadline cutoff",
+			rows: []RoleRow{
+				rowComplete(domain.RoleRequirements),
+				rowInterrupted(domain.RoleArchitecture, domain.CauseDeadlineCutoff),
+				rowFailed(domain.RoleQA),
+				rowFailed(domain.RoleSecurity),
+			},
+			wantStatus:     domain.SessionPartial,
+			wantReason:     domain.ReasonDeadlineCutoff,
+			wantCompleted:  1,
+			wantIncomplete: 3,
+		},
+		{
+			name: "zero complete: all failed",
+			rows: []RoleRow{
+				rowFailed(domain.RoleRequirements),
+				rowFailed(domain.RoleArchitecture),
+				rowFailed(domain.RoleQA),
+				rowFailed(domain.RoleSecurity),
+			},
+			wantStatus:     domain.SessionFailed,
+			wantReason:     domain.ReasonRoleFailures,
+			wantCompleted:  0,
+			wantIncomplete: 4,
+		},
+		{
+			name: "zero complete: user cancel",
+			rows: []RoleRow{
+				rowInterrupted(domain.RoleRequirements, domain.CauseUserCancelled),
+				rowInterrupted(domain.RoleArchitecture, domain.CauseUserCancelled),
+				rowInterrupted(domain.RoleQA, domain.CauseUserCancelled),
+				rowInterrupted(domain.RoleSecurity, domain.CauseUserCancelled),
+			},
+			wantStatus:     domain.SessionPartial,
+			wantReason:     domain.ReasonUserCancelled,
+			wantCompleted:  0,
+			wantIncomplete: 4,
+		},
+		{
+			name: "zero complete: process restart",
+			rows: []RoleRow{
+				rowInterrupted(domain.RoleRequirements, domain.CauseProcessRestart),
+				rowFailed(domain.RoleArchitecture),
+				rowFailed(domain.RoleQA),
+				rowFailed(domain.RoleSecurity),
+			},
+			wantStatus:     domain.SessionFailed,
+			wantReason:     domain.ReasonProcessRestart,
+			wantCompleted:  0,
+			wantIncomplete: 4,
+		},
+		{
+			name: "zero complete: deadline cutoff",
+			rows: []RoleRow{
+				rowInterrupted(domain.RoleRequirements, domain.CauseDeadlineCutoff),
+				rowFailed(domain.RoleArchitecture),
+				rowFailed(domain.RoleQA),
+				rowFailed(domain.RoleSecurity),
+			},
+			wantStatus:     domain.SessionFailed,
+			wantReason:     domain.ReasonDeadlineCutoff,
+			wantCompleted:  0,
+			wantIncomplete: 4,
+		},
+		{
+			name: "mixed user/process/deadline proves user precedence (1 complete)",
+			rows: []RoleRow{
+				rowComplete(domain.RoleRequirements),
+				rowInterrupted(domain.RoleArchitecture, domain.CauseUserCancelled),
+				rowInterrupted(domain.RoleQA, domain.CauseProcessRestart),
+				rowInterrupted(domain.RoleSecurity, domain.CauseDeadlineCutoff),
+			},
+			wantStatus:     domain.SessionPartial,
+			wantReason:     domain.ReasonUserCancelled,
+			wantCompleted:  1,
+			wantIncomplete: 3,
+		},
+		{
+			name: "mixed user/process/deadline proves user precedence (0 complete)",
+			rows: []RoleRow{
+				rowFailed(domain.RoleRequirements),
+				rowInterrupted(domain.RoleArchitecture, domain.CauseUserCancelled),
+				rowInterrupted(domain.RoleQA, domain.CauseProcessRestart),
+				rowInterrupted(domain.RoleSecurity, domain.CauseDeadlineCutoff),
+			},
+			wantStatus:     domain.SessionPartial,
+			wantReason:     domain.ReasonUserCancelled,
+			wantCompleted:  0,
+			wantIncomplete: 4,
+		},
+		{
+			name: "mixed process/deadline proves process precedence (1 complete)",
+			rows: []RoleRow{
+				rowComplete(domain.RoleRequirements),
+				rowFailed(domain.RoleArchitecture),
+				rowInterrupted(domain.RoleQA, domain.CauseProcessRestart),
+				rowInterrupted(domain.RoleSecurity, domain.CauseDeadlineCutoff),
+			},
+			wantStatus:     domain.SessionPartial,
+			wantReason:     domain.ReasonProcessRestart,
+			wantCompleted:  1,
+			wantIncomplete: 3,
+		},
+		{
+			name: "mixed process/deadline proves process precedence (0 complete)",
+			rows: []RoleRow{
+				rowFailed(domain.RoleRequirements),
+				rowFailed(domain.RoleArchitecture),
+				rowInterrupted(domain.RoleQA, domain.CauseProcessRestart),
+				rowInterrupted(domain.RoleSecurity, domain.CauseDeadlineCutoff),
+			},
+			wantStatus:     domain.SessionFailed,
+			wantReason:     domain.ReasonProcessRestart,
+			wantCompleted:  0,
+			wantIncomplete: 4,
+		},
 	}
-	if v.Status != domain.SessionComplete {
-		t.Errorf("status = %s, want complete", v.Status)
-	}
-	if v.Reason != domain.ReasonAllRolesComplete {
-		t.Errorf("reason = %s, want all_roles_complete", v.Reason)
-	}
-	if v.CompletedRoleCount != 4 || v.FailedRoleCount != 0 {
-		t.Errorf("counts = %d/%d, want 4/0", v.CompletedRoleCount, v.FailedRoleCount)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := Compose(ComposerInput{Roles: tc.rows})
+			if err != nil {
+				t.Fatalf("Compose returned unexpected error: %v", err)
+			}
+			if v.Status != tc.wantStatus {
+				t.Errorf("status = %s, want %s", v.Status, tc.wantStatus)
+			}
+			if v.Reason != tc.wantReason {
+				t.Errorf("reason = %s, want %s", v.Reason, tc.wantReason)
+			}
+			if v.CompletedRoleCount != tc.wantCompleted {
+				t.Errorf("CompletedRoleCount = %d, want %d", v.CompletedRoleCount, tc.wantCompleted)
+			}
+			if v.IncompleteRoleCount != tc.wantIncomplete {
+				t.Errorf("IncompleteRoleCount = %d, want %d", v.IncompleteRoleCount, tc.wantIncomplete)
+			}
+		})
 	}
 }
 
-// AC-02: three valid, one validation failure.
-func TestThreeCompleteIsPartial(t *testing.T) {
-	v, err := Compose(ComposerInput{Roles: rows(
-		domain.RoleComplete, domain.RoleComplete, domain.RoleComplete, domain.RoleFailed)})
-	if err != nil {
-		t.Fatalf("Compose: %v", err)
+func TestComposeRejectsInvalidInterruptCause(t *testing.T) {
+	cases := []struct {
+		name string
+		rows []RoleRow
+	}{
+		{
+			name: "interrupted with empty cause",
+			rows: []RoleRow{
+				rowComplete(domain.RoleRequirements),
+				rowComplete(domain.RoleArchitecture),
+				rowComplete(domain.RoleQA),
+				{Role: domain.RoleSecurity, Status: domain.RoleInterrupted, InterruptCause: ""},
+			},
+		},
+		{
+			name: "interrupted with unknown cause",
+			rows: []RoleRow{
+				rowComplete(domain.RoleRequirements),
+				rowComplete(domain.RoleArchitecture),
+				rowComplete(domain.RoleQA),
+				{Role: domain.RoleSecurity, Status: domain.RoleInterrupted, InterruptCause: "unknown"},
+			},
+		},
+		{
+			name: "complete with cause",
+			rows: []RoleRow{
+				rowComplete(domain.RoleRequirements),
+				rowComplete(domain.RoleArchitecture),
+				rowComplete(domain.RoleQA),
+				{Role: domain.RoleSecurity, Status: domain.RoleComplete, InterruptCause: domain.CauseUserCancelled},
+			},
+		},
+		{
+			name: "failed with cause",
+			rows: []RoleRow{
+				rowComplete(domain.RoleRequirements),
+				rowComplete(domain.RoleArchitecture),
+				rowComplete(domain.RoleQA),
+				{Role: domain.RoleSecurity, Status: domain.RoleFailed, InterruptCause: domain.CauseProcessRestart},
+			},
+		},
 	}
-	if v.Status != domain.SessionPartial {
-		t.Errorf("status = %s, want partial", v.Status)
-	}
-	if v.CompletedRoleCount != 3 || v.FailedRoleCount != 1 {
-		t.Errorf("counts = %d/%d, want 3/1", v.CompletedRoleCount, v.FailedRoleCount)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Compose(ComposerInput{Roles: tc.rows})
+			if err == nil {
+				t.Errorf("%s: Compose succeeded, want rejection", tc.name)
+			}
+		})
 	}
 }
 
-// AC-03: all four fail.
-func TestNoCompleteRolesIsFailed(t *testing.T) {
-	v, err := Compose(ComposerInput{Roles: rows(
-		domain.RoleFailed, domain.RoleFailed, domain.RoleFailed, domain.RoleFailed)})
-	if err != nil {
-		t.Fatalf("Compose: %v", err)
-	}
-	if v.Status != domain.SessionFailed {
-		t.Errorf("status = %s, want failed", v.Status)
-	}
-	if v.CompletedRoleCount != 0 || v.FailedRoleCount != 4 {
-		t.Errorf("counts = %d/%d, want 0/4", v.CompletedRoleCount, v.FailedRoleCount)
-	}
-}
-
-// Interrupted roles are not complete, so they count toward failed_role_count.
-func TestInterruptedRolesCountAsNotCompleted(t *testing.T) {
-	v, err := Compose(ComposerInput{
-		Roles: rows(domain.RoleComplete, domain.RoleInterrupted,
-			domain.RoleInterrupted, domain.RoleInterrupted),
-		CancelRequested: true,
-	})
-	if err != nil {
-		t.Fatalf("Compose: %v", err)
-	}
-	if v.Status != domain.SessionPartial || v.Reason != domain.ReasonUserCancelled {
-		t.Errorf("verdict = %s/%s, want partial/user_cancelled", v.Status, v.Reason)
-	}
-	if v.CompletedRoleCount != 1 || v.FailedRoleCount != 3 {
-		t.Errorf("counts = %d/%d, want 1/3", v.CompletedRoleCount, v.FailedRoleCount)
-	}
-}
-
-// Rule 1 wins over cancellation: a late cancel does not change a finished review.
 func TestCancelAfterEverythingCompletedStillCompletes(t *testing.T) {
-	v, err := Compose(ComposerInput{
-		Roles: rows(domain.RoleComplete, domain.RoleComplete,
-			domain.RoleComplete, domain.RoleComplete),
-		CancelRequested: true,
-	})
+	rows := []RoleRow{
+		rowComplete(domain.RoleRequirements),
+		rowComplete(domain.RoleArchitecture),
+		rowComplete(domain.RoleQA),
+		rowComplete(domain.RoleSecurity),
+	}
+	v, err := Compose(ComposerInput{Roles: rows})
 	if err != nil {
 		t.Fatalf("Compose: %v", err)
 	}
 	if v.Status != domain.SessionComplete || v.Reason != domain.ReasonAllRolesComplete {
 		t.Errorf("verdict = %s/%s, want complete/all_roles_complete", v.Status, v.Reason)
 	}
+	rep := BuildReport("sess-1", "snap-1", "hash-1", nil, v, true)
+	if rep.Status != domain.SessionComplete || rep.Reason != domain.ReasonAllRolesComplete {
+		t.Errorf("report status/reason = %s/%s, want complete/all_roles_complete", rep.Status, rep.Reason)
+	}
+	if !rep.CancelRequested {
+		t.Errorf("report CancelRequested = false, want true")
+	}
 }
 
-// Aggregation may never start while a role is still executable.
 func TestComposeRefusesNonTerminalRoles(t *testing.T) {
 	for _, s := range []domain.RoleStatus{domain.RolePending, domain.RoleInFlight} {
-		_, err := Compose(ComposerInput{Roles: rows(
-			domain.RoleComplete, domain.RoleComplete, domain.RoleComplete, s)})
+		_, err := Compose(ComposerInput{Roles: []RoleRow{
+			rowComplete(domain.RoleRequirements),
+			rowComplete(domain.RoleArchitecture),
+			rowComplete(domain.RoleQA),
+			{Role: domain.RoleSecurity, Status: s},
+		}})
 		if err == nil {
 			t.Errorf("role status %s: Compose succeeded, want refusal", s)
 		}
@@ -134,6 +326,57 @@ func TestComposeRefusesMalformedRowSets(t *testing.T) {
 	for name, r := range cases {
 		if _, err := Compose(ComposerInput{Roles: r}); err == nil {
 			t.Errorf("%s: Compose succeeded, want refusal", name)
+		}
+	}
+}
+
+func TestReportJSONOutcomeCountsAndCancelRequested(t *testing.T) {
+	for _, cancelReq := range []bool{false, true} {
+		verdict := Verdict{
+			Status:              domain.SessionComplete,
+			Reason:              domain.ReasonAllRolesComplete,
+			CompletedRoleCount:  4,
+			IncompleteRoleCount: 0,
+		}
+		rep := BuildReport("sess-1", "snap-1", "hash-1", nil, verdict, cancelReq)
+
+		data, err := json.Marshal(rep)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		jsonStr := string(data)
+
+		// Must have incomplete_role_count, never the legacy field name.
+		legacyField := "failed" + "_role" + "_count"
+		if !strings.Contains(jsonStr, `"incomplete_role_count":0`) {
+			t.Errorf("JSON missing incomplete_role_count: %s", jsonStr)
+		}
+		if strings.Contains(jsonStr, legacyField) {
+			t.Errorf("JSON unexpectedly contains legacy field %q: %s", legacyField, jsonStr)
+		}
+
+		// Must always have cancel_requested with the supplied boolean value.
+		expectedCancel := `"cancel_requested":false`
+		if cancelReq {
+			expectedCancel = `"cancel_requested":true`
+		}
+		if !strings.Contains(jsonStr, expectedCancel) {
+			t.Errorf("JSON missing %s: %s", expectedCancel, jsonStr)
+		}
+
+		// Verify round-trip unmarshaling to a map.
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
+		if _, exists := raw[legacyField]; exists {
+			t.Errorf("raw map unexpectedly has legacy key %q", legacyField)
+		}
+		if incVal, ok := raw["incomplete_role_count"].(float64); !ok || int(incVal) != 0 {
+			t.Errorf("incomplete_role_count in raw map = %v, want 0", raw["incomplete_role_count"])
+		}
+		if cancelVal, ok := raw["cancel_requested"].(bool); !ok || cancelVal != cancelReq {
+			t.Errorf("cancel_requested in raw map = %v, want %v", raw["cancel_requested"], cancelReq)
 		}
 	}
 }

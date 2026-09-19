@@ -9,40 +9,41 @@ import (
 
 // RoleRow is one persisted role row as the composer sees it.
 type RoleRow struct {
-	Role   domain.Role
-	Status domain.RoleStatus
+	Role           domain.Role
+	Status         domain.RoleStatus
+	InterruptCause domain.InterruptCause
 }
 
 // ComposerInput is the committed state the composer derives its verdict from.
 type ComposerInput struct {
-	Roles           []RoleRow
-	CancelRequested bool
+	Roles []RoleRow
 }
 
 // Verdict is the terminal session decision.
 type Verdict struct {
-	Status             domain.SessionStatus
-	Reason             domain.TerminalReason
-	CompletedRoleCount int
-	FailedRoleCount    int
+	Status              domain.SessionStatus
+	Reason              domain.TerminalReason
+	CompletedRoleCount  int
+	IncompleteRoleCount int
 }
 
-// Compose derives the terminal session status from committed role rows.
+// Compose derives the terminal session status and reason from committed role rows.
 //
 // The rules are evaluated first-match-wins:
 //
-//  1. all 4 complete                              -> COMPLETE / all_roles_complete
-//  2. else cancel requested and all roles terminal -> PARTIAL  / user_cancelled
-//  3. else at least one complete                   -> PARTIAL
-//  4. else                                         -> FAILED
+//  1. 4 complete                    -> complete / all_roles_complete
+//  2. else any interrupted/user_cancelled -> partial  / user_cancelled
+//  3. else 1..3 complete            -> partial  / first remaining reason
+//  4. else                          -> failed   / first remaining reason
 //
-// Rules 3 and 4 have no terminal reason in the frozen contract, so Reason is
-// left empty for them rather than invented here.
+// Remaining reason precedence:
+//
+//	process_restart -> deadline_cutoff -> role_failures
 //
 // Compose refuses to run unless all four roles are terminal: aggregation may
 // never begin while a role is pending or in flight.
 func Compose(in ComposerInput) (Verdict, error) {
-	seen := make(map[domain.Role]domain.RoleStatus, len(in.Roles))
+	seen := make(map[domain.Role]RoleRow, len(in.Roles))
 	for _, row := range in.Roles {
 		if !domain.IsValidRole(row.Role) {
 			return Verdict{}, fmt.Errorf("compose: unknown role %q", row.Role)
@@ -58,39 +59,69 @@ func Compose(in ComposerInput) (Verdict, error) {
 				"compose: role %q is %q, not terminal; aggregation requires all %d roles terminal",
 				row.Role, row.Status, domain.RoleCount)
 		}
-		seen[row.Role] = row.Status
+		if row.Status == domain.RoleInterrupted {
+			if !domain.IsValidInterruptCause(row.InterruptCause) {
+				return Verdict{}, fmt.Errorf("compose: role %q is interrupted but has invalid interrupt cause %q", row.Role, row.InterruptCause)
+			}
+		} else if row.InterruptCause != "" {
+			return Verdict{}, fmt.Errorf("compose: role %q has status %q but non-empty interrupt cause %q", row.Role, row.Status, row.InterruptCause)
+		}
+		seen[row.Role] = row
 	}
 	if len(seen) != domain.RoleCount {
 		return Verdict{}, fmt.Errorf("compose: got %d role rows, expected %d", len(seen), domain.RoleCount)
 	}
 
 	completed := 0
-	for _, status := range seen {
-		if status == domain.RoleComplete {
+	hasUserCancelled := false
+	hasProcessRestart := false
+	hasDeadlineCutoff := false
+
+	for _, row := range seen {
+		if row.Status == domain.RoleComplete {
 			completed++
+		}
+		if row.Status == domain.RoleInterrupted {
+			switch row.InterruptCause {
+			case domain.CauseUserCancelled:
+				hasUserCancelled = true
+			case domain.CauseProcessRestart:
+				hasProcessRestart = true
+			case domain.CauseDeadlineCutoff:
+				hasDeadlineCutoff = true
+			}
 		}
 	}
 
-	// failed_role_count intentionally counts every non-complete terminal role,
-	// including interrupted ones. UNRESOLVED BEFORE FREEZE: the name may
-	// mislead, and freeze must either keep this semantics explicitly or split
-	// the counter.
 	verdict := Verdict{
-		CompletedRoleCount: completed,
-		FailedRoleCount:    domain.RoleCount - completed,
+		CompletedRoleCount:  completed,
+		IncompleteRoleCount: domain.RoleCount - completed,
+	}
+
+	remainingReason := func() domain.TerminalReason {
+		switch {
+		case hasProcessRestart:
+			return domain.ReasonProcessRestart
+		case hasDeadlineCutoff:
+			return domain.ReasonDeadlineCutoff
+		default:
+			return domain.ReasonRoleFailures
+		}
 	}
 
 	switch {
 	case completed == domain.RoleCount:
 		verdict.Status = domain.SessionComplete
 		verdict.Reason = domain.ReasonAllRolesComplete
-	case in.CancelRequested:
+	case hasUserCancelled:
 		verdict.Status = domain.SessionPartial
 		verdict.Reason = domain.ReasonUserCancelled
 	case completed > 0:
 		verdict.Status = domain.SessionPartial
+		verdict.Reason = remainingReason()
 	default:
 		verdict.Status = domain.SessionFailed
+		verdict.Reason = remainingReason()
 	}
 
 	return verdict, nil
@@ -119,11 +150,12 @@ type Report struct {
 	SnapshotID   string `json:"snapshot_id"`
 	SnapshotHash string `json:"snapshot_hash"`
 
-	Status domain.SessionStatus  `json:"status"`
-	Reason domain.TerminalReason `json:"terminal_reason,omitempty"`
+	Status          domain.SessionStatus  `json:"status"`
+	Reason          domain.TerminalReason `json:"terminal_reason,omitempty"`
+	CancelRequested bool                  `json:"cancel_requested"`
 
-	CompletedRoleCount int `json:"completed_role_count"`
-	FailedRoleCount    int `json:"failed_role_count"`
+	CompletedRoleCount  int `json:"completed_role_count"`
+	IncompleteRoleCount int `json:"incomplete_role_count"`
 
 	Roles    []RoleSummary   `json:"roles"`
 	Findings []ReportFinding `json:"findings"`
@@ -141,15 +173,17 @@ func BuildReport(
 	snapshotHash string,
 	outcomes []RoleOutcome,
 	verdict Verdict,
+	cancelRequested bool,
 ) Report {
 	report := Report{
-		SessionID:          sessionID,
-		SnapshotID:         snapshotID,
-		SnapshotHash:       snapshotHash,
-		Status:             verdict.Status,
-		Reason:             verdict.Reason,
-		CompletedRoleCount: verdict.CompletedRoleCount,
-		FailedRoleCount:    verdict.FailedRoleCount,
+		SessionID:           sessionID,
+		SnapshotID:          snapshotID,
+		SnapshotHash:        snapshotHash,
+		Status:              verdict.Status,
+		Reason:              verdict.Reason,
+		CancelRequested:     cancelRequested,
+		CompletedRoleCount:  verdict.CompletedRoleCount,
+		IncompleteRoleCount: verdict.IncompleteRoleCount,
 	}
 
 	roles := make([]RoleSummary, 0, len(outcomes))

@@ -81,15 +81,14 @@ A role can never exceed two provider calls.
 
 The current milestone composer correctly refuses to run until all four role
 outcomes are terminal and produces deterministic ordering. Its in-memory verdict
-logic predates the approved canonical flow and still needs these implementation
-changes:
+logic aligns with the approved canonical flow:
 
-- derive `terminal_reason` from committed interruption causes, not the live
+- derives `terminal_reason` from committed interruption causes, not the live
   cancellation flag;
-- add `process_restart`, `deadline_cutoff`, and `role_failures` reasons;
-- replace the legacy `failed_role_count` with `incomplete_role_count`;
-- execute the gate and terminal session update transactionally once persistence
-  exists.
+- includes `process_restart`, `deadline_cutoff`, and `role_failures` reasons;
+- uses `incomplete_role_count` (`4 - completed_role_count`);
+- executing the gate and terminal session update transactionally will be added
+  once persistence exists.
 
 Canonical composer behavior is defined only by `CANONICAL-FLOW.md`.
 
@@ -114,8 +113,6 @@ provider adapter, and the supervised worker restart policy.
 | Gap | Current code | Required change |
 |---|---|---|
 | Format-repair call fails in transport | Reports the transport failure | Keep this behavior; persist `transport` or `timeout` |
-| Outcome counter | `failed_role_count` counts every non-complete role | Rename to `incomplete_role_count` |
-| Terminal reason | Missing for most partial/failed outcomes | Derive it from committed role causes using canonical precedence |
 | Prompt token count | Rough four-characters-per-token estimate | Use the configured model's tokenizer |
 | Finding field set | Requires `severity` and `category` | Freeze the complete output schema before the real adapter |
 

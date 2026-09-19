@@ -101,7 +101,17 @@ const (
 	ReasonUserCancelled    TerminalReason = "user_cancelled"
 	ReasonProcessRestart   TerminalReason = "process_restart"
 	ReasonDeadlineCutoff   TerminalReason = "deadline_cutoff"
+	ReasonRoleFailures     TerminalReason = "role_failures"
 )
+
+// IsValidTerminalReason reports whether r is a canonical terminal reason.
+func IsValidTerminalReason(r TerminalReason) bool {
+	switch r {
+	case ReasonAllRolesComplete, ReasonUserCancelled, ReasonProcessRestart, ReasonDeadlineCutoff, ReasonRoleFailures:
+		return true
+	}
+	return false
+}
 
 // InterruptCause is the reason a pending or in-flight role became interrupted.
 type InterruptCause string
@@ -111,3 +121,12 @@ const (
 	CauseDeadlineCutoff InterruptCause = "deadline_cutoff"
 	CauseProcessRestart InterruptCause = "process_restart"
 )
+
+// IsValidInterruptCause reports whether c is a canonical role interruption cause.
+func IsValidInterruptCause(c InterruptCause) bool {
+	switch c {
+	case CauseUserCancelled, CauseDeadlineCutoff, CauseProcessRestart:
+		return true
+	}
+	return false
+}

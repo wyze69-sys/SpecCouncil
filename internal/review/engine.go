@@ -39,7 +39,7 @@ func (e Engine) Run(
 	cancelObserved := false
 
 	for _, role := range domain.Roles {
-		if opts.Cancelled != nil && opts.Cancelled() {
+		if cancelObserved || (opts.Cancelled != nil && opts.Cancelled()) {
 			// Cancellation stops new dispatch. The role never runs.
 			cancelObserved = true
 			outcomes = append(outcomes, interrupted(role, domain.CauseUserCancelled))
@@ -49,14 +49,13 @@ func (e Engine) Run(
 	}
 
 	verdict, err := Compose(ComposerInput{
-		Roles:           rowsFrom(outcomes),
-		CancelRequested: cancelObserved,
+		Roles: rowsFrom(outcomes),
 	})
 	if err != nil {
 		return Report{}, err
 	}
 
-	return BuildReport(sessionID, snap.ID, snap.Hash, outcomes, verdict), nil
+	return BuildReport(sessionID, snap.ID, snap.Hash, outcomes, verdict, cancelObserved), nil
 }
 
 // interrupted builds the terminal outcome of a role that never executed.
@@ -72,7 +71,11 @@ func interrupted(role domain.Role, cause domain.InterruptCause) RoleOutcome {
 func rowsFrom(outcomes []RoleOutcome) []RoleRow {
 	rows := make([]RoleRow, 0, len(outcomes))
 	for _, o := range outcomes {
-		rows = append(rows, RoleRow{Role: o.Role, Status: o.Status})
+		rows = append(rows, RoleRow{
+			Role:           o.Role,
+			Status:         o.Status,
+			InterruptCause: o.InterruptCause,
+		})
 	}
 	return rows
 }

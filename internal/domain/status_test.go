@@ -75,3 +75,45 @@ func TestSessionHasNoCancelledState(t *testing.T) {
 		t.Error("terminal session states must not transition")
 	}
 }
+
+func TestIsValidTerminalReason(t *testing.T) {
+	cases := []struct {
+		reason TerminalReason
+		want   bool
+	}{
+		{ReasonAllRolesComplete, true},
+		{ReasonUserCancelled, true},
+		{ReasonProcessRestart, true},
+		{ReasonDeadlineCutoff, true},
+		{ReasonRoleFailures, true},
+		{TerminalReason(""), false},
+		{TerminalReason("unknown"), false},
+		{TerminalReason("timeout"), false},
+		{TerminalReason("all_roles_done"), false},
+	}
+	for _, tc := range cases {
+		if got := IsValidTerminalReason(tc.reason); got != tc.want {
+			t.Errorf("IsValidTerminalReason(%q) = %v, want %v", tc.reason, got, tc.want)
+		}
+	}
+}
+
+func TestIsValidInterruptCause(t *testing.T) {
+	cases := []struct {
+		cause InterruptCause
+		want  bool
+	}{
+		{CauseUserCancelled, true},
+		{CauseDeadlineCutoff, true},
+		{CauseProcessRestart, true},
+		{InterruptCause(""), false},
+		{InterruptCause("unknown"), false},
+		{InterruptCause("role_failures"), false},
+		{InterruptCause("timeout"), false},
+	}
+	for _, tc := range cases {
+		if got := IsValidInterruptCause(tc.cause); got != tc.want {
+			t.Errorf("IsValidInterruptCause(%q) = %v, want %v", tc.cause, got, tc.want)
+		}
+	}
+}

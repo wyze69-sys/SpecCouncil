@@ -33,8 +33,11 @@ func TestEngineRunsAllFourRolesAndReports(t *testing.T) {
 	if report.Status != domain.SessionComplete || report.Reason != domain.ReasonAllRolesComplete {
 		t.Errorf("verdict = %s/%s, want complete/all_roles_complete", report.Status, report.Reason)
 	}
-	if report.CompletedRoleCount != 4 || report.FailedRoleCount != 0 {
-		t.Errorf("counts = %d/%d, want 4/0", report.CompletedRoleCount, report.FailedRoleCount)
+	if report.CompletedRoleCount != 4 || report.IncompleteRoleCount != 0 {
+		t.Errorf("counts = %d/%d, want 4/0", report.CompletedRoleCount, report.IncompleteRoleCount)
+	}
+	if report.CancelRequested {
+		t.Errorf("cancel_requested = true, want false")
 	}
 	if len(report.Roles) != domain.RoleCount {
 		t.Fatalf("report has %d role summaries, want %d", len(report.Roles), domain.RoleCount)
@@ -148,14 +151,14 @@ func TestReportOrderingIgnoresOutcomeOrder(t *testing.T) {
 		t.Fatalf("Compose: %v", err)
 	}
 
-	forward := BuildReport("rev-1", snap.ID, snap.Hash, outcomes, verdict)
+	forward := BuildReport("rev-1", snap.ID, snap.Hash, outcomes, verdict, false)
 
 	shuffled := []RoleOutcome{outcomes[2], outcomes[3], outcomes[0], outcomes[1]}
 	verdict2, err := Compose(ComposerInput{Roles: rowsFrom(shuffled)})
 	if err != nil {
 		t.Fatalf("Compose shuffled: %v", err)
 	}
-	backward := BuildReport("rev-1", snap.ID, snap.Hash, shuffled, verdict2)
+	backward := BuildReport("rev-1", snap.ID, snap.Hash, shuffled, verdict2, false)
 
 	if !reflect.DeepEqual(forward, backward) {
 		t.Error("report differs when roles finish in a different order")
@@ -182,7 +185,7 @@ func TestFailedRoleContributesNoFindings(t *testing.T) {
 		t.Fatalf("Compose: %v", err)
 	}
 
-	report := BuildReport("rev-1", snap.ID, snap.Hash, outcomes, verdict)
+	report := BuildReport("rev-1", snap.ID, snap.Hash, outcomes, verdict, false)
 	if len(report.Findings) != 0 {
 		t.Errorf("report has %d findings from a failed role, want 0", len(report.Findings))
 	}
