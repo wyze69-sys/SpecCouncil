@@ -142,7 +142,7 @@ P5 Read models       P6 FIFO claim + timing policy
 | P4 | Request hash v1 and atomic create/idempotency | P3 | COMPLETE (`6906d85`) |
 | P5 | Deterministic read models | P4 | COMPLETE (`7c8016c`) |
 | P6 | Validated timing policy and single-session FIFO claim | P4 | COMPLETE (`32c6ec1`) |
-| P7 | Idempotent cancellation request mutation | P6 | BLOCKED |
+| P7 | Idempotent cancellation request mutation | P6 | READY |
 | P8 | Deterministic guarded dispatch and cancel race | P7 | BLOCKED |
 | P9 | Compare-and-set success/failure publication | P5, P8 | BLOCKED |
 | P10 | Cancel/cutoff/deadline sweeps and restart recovery | P9 | BLOCKED |
