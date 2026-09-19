@@ -6,12 +6,23 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/wyze69-sys/SpecCouncil/internal/storage/sqlite/migrations"
 )
+
+const exactMetadataTableSQL = `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL UNIQUE,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL
+);`
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -61,6 +72,52 @@ func tableExists(t *testing.T, db *sql.DB, tableName string) bool {
 		t.Fatalf("failed to check table existence for %q: %v", tableName, err)
 	}
 	return count > 0
+}
+
+func stringContains(s, substr string) bool {
+	return strings.Contains(s, substr)
+}
+
+func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
+	// Verify that migrations.FS contains the entire directory including embed.go
+	entries, err := fs.ReadDir(migrations.FS, ".")
+	if err != nil {
+		t.Fatalf("read migrations.FS: %v", err)
+	}
+
+	foundEmbedGo := false
+	found001SQL := false
+	for _, e := range entries {
+		if e.Name() == "embed.go" {
+			foundEmbedGo = true
+		}
+		if e.Name() == "001_migration_metadata.sql" {
+			found001SQL = true
+		}
+	}
+
+	if !foundEmbedGo {
+		t.Fatalf("expected embed.go to be embedded in migrations.FS")
+	}
+	if !found001SQL {
+		t.Fatalf("expected 001_migration_metadata.sql to be embedded in migrations.FS")
+	}
+
+	// Verify discoverManifest walks the tree, ignores embed.go, and discovers 001_migration_metadata.sql
+	manifest, err := discoverManifest(migrations.FS)
+	if err != nil {
+		t.Fatalf("discoverManifest on production FS: %v", err)
+	}
+
+	if len(manifest) != 1 {
+		t.Fatalf("expected 1 migration in production FS, got %d", len(manifest))
+	}
+	if manifest[0].Version != 1 {
+		t.Errorf("manifest[0].Version = %d, want 1", manifest[0].Version)
+	}
+	if manifest[0].Name != "migration_metadata" {
+		t.Errorf("manifest[0].Name = %q, want 'migration_metadata'", manifest[0].Name)
+	}
 }
 
 func TestManifest_FilenameAcceptanceAndRejection(t *testing.T) {
@@ -169,11 +226,12 @@ func TestManifest_FilenameAcceptanceAndRejection(t *testing.T) {
 			errSubstr: "does not match migration filename pattern",
 		},
 		{
-			name: "non-SQL files such as README.md are ignored",
+			name: "non-SQL files such as README.md and embed.go are ignored",
 			fsys: fstest.MapFS{
 				"README.md":                  &fstest.MapFile{Data: []byte("# Readme")},
 				"notes.txt":                  &fstest.MapFile{Data: []byte("notes")},
 				".gitkeep":                   &fstest.MapFile{Data: []byte("")},
+				"embed.go":                   &fstest.MapFile{Data: []byte("package migrations")},
 				"001_migration_metadata.sql": &fstest.MapFile{Data: []byte("SELECT 1;")},
 			},
 			wantErr: false,
@@ -188,7 +246,7 @@ func TestManifest_FilenameAcceptanceAndRejection(t *testing.T) {
 			errSubstr: "duplicate migration version 001",
 		},
 		{
-			name: "subdirectories with files are rejected",
+			name: "nested directory with SQL file rejected",
 			fsys: fstest.MapFS{
 				"001_init.sql":       &fstest.MapFile{Data: []byte("SELECT 1;")},
 				"nested/002_sub.sql": &fstest.MapFile{Data: []byte("SELECT 2;")},
@@ -197,10 +255,19 @@ func TestManifest_FilenameAcceptanceAndRejection(t *testing.T) {
 			errSubstr: "nested migrations are rejected",
 		},
 		{
-			name: "subdirectories with non-sql files are rejected",
+			name: "nested directory with non-SQL file rejected",
 			fsys: fstest.MapFS{
 				"001_init.sql":     &fstest.MapFile{Data: []byte("SELECT 1;")},
 				"subdir/README.md": &fstest.MapFile{Data: []byte("docs")},
+			},
+			wantErr:   true,
+			errSubstr: "nested migrations are rejected",
+		},
+		{
+			name: "deeply nested directory rejected",
+			fsys: fstest.MapFS{
+				"001_init.sql":            &fstest.MapFile{Data: []byte("SELECT 1;")},
+				"a/b/c/nested_script.sql": &fstest.MapFile{Data: []byte("SELECT 2;")},
 			},
 			wantErr:   true,
 			errSubstr: "nested migrations are rejected",
@@ -223,16 +290,7 @@ func TestManifest_FilenameAcceptanceAndRejection(t *testing.T) {
 					t.Fatalf("expected error containing %q, got nil", tt.errSubstr)
 				}
 				if tt.errSubstr != "" && !errors.Is(err, os.ErrNotExist) {
-					// verify error text
-					errMsg := err.Error()
-					found := false
-					for _, part := range []string{tt.errSubstr} {
-						if len(errMsg) >= len(part) && (errMsg == part || stringContains(errMsg, part)) {
-							found = true
-							break
-						}
-					}
-					if !found {
+					if !stringContains(err.Error(), tt.errSubstr) {
 						t.Fatalf("expected error containing %q, got: %v", tt.errSubstr, err)
 					}
 				}
@@ -248,22 +306,10 @@ func TestManifest_FilenameAcceptanceAndRejection(t *testing.T) {
 	}
 }
 
-func stringContains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || (len(substr) > 0 && len(s) > 0 && func() bool {
-		for i := 0; i+len(substr) <= len(s); i++ {
-			if s[i:i+len(substr)] == substr {
-				return true
-			}
-		}
-		return false
-	}()))
-}
-
 func TestManifest_NumericOrderingIndependentOfEnumeration(t *testing.T) {
-	// Provide entries in scrambled order
 	fsys := fstest.MapFS{
 		"003_third.sql":  &fstest.MapFile{Data: []byte("CREATE TABLE t3 (id INT);")},
-		"001_first.sql":  &fstest.MapFile{Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);")},
+		"001_first.sql":  &fstest.MapFile{Data: []byte(exactMetadataTableSQL)},
 		"002_second.sql": &fstest.MapFile{Data: []byte("CREATE TABLE t2 (id INT);")},
 	}
 
@@ -336,7 +382,6 @@ func TestMigrate_FreshDatabaseAppliesPending(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
-	// Migrate with embedded production migrations
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatalf("store.Migrate failed: %v", err)
 	}
@@ -364,8 +409,8 @@ func TestMigrate_FreshDatabaseAppliesPending(t *testing.T) {
 	if len(applied[0].Checksum) != 64 {
 		t.Errorf("invalid checksum length %d", len(applied[0].Checksum))
 	}
-	if _, err := time.Parse(time.RFC3339Nano, applied[0].AppliedAt); err != nil {
-		t.Errorf("applied_at is not valid RFC3339Nano: %v (%s)", err, applied[0].AppliedAt)
+	if err := validateAppliedAt(applied[0].AppliedAt); err != nil {
+		t.Errorf("invalid applied_at: %v (%s)", err, applied[0].AppliedAt)
 	}
 }
 
@@ -375,7 +420,7 @@ func TestMigrate_AtomicAppearanceOfSQLAndMetadata(t *testing.T) {
 
 	testFS := fstest.MapFS{
 		"001_metadata.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+			Data: []byte(exactMetadataTableSQL),
 		},
 		"002_create_atomic.sql": &fstest.MapFile{
 			Data: []byte("CREATE TABLE atomic_test (id INTEGER PRIMARY KEY, val TEXT NOT NULL);"),
@@ -423,14 +468,12 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 	originalTimestamp := initialApplied[0].AppliedAt
 
-	// Advance controlled clock if clock is called, to prove rerun does not touch applied_at
 	origClock := clock
 	clock = func() time.Time {
 		return time.Now().Add(10 * time.Hour)
 	}
 	defer func() { clock = origClock }()
 
-	// Rerun 1: immediately on the same store instance
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatalf("second Migrate: %v", err)
 	}
@@ -443,7 +486,6 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 		t.Fatalf("applied_at changed on rerun: got %s, want %s", afterSecond[0].AppliedAt, originalTimestamp)
 	}
 
-	// Rerun 2: reopen store from the same path and rerun
 	storePath := store.canonicalPath
 	storeTimeout := store.cfg.BusyTimeout
 
@@ -477,7 +519,7 @@ func TestMigrate_ChangedSQLFailsClosed(t *testing.T) {
 
 	initialFS := fstest.MapFS{
 		"001_metadata.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+			Data: []byte(exactMetadataTableSQL),
 		},
 		"002_create_items.sql": &fstest.MapFile{
 			Data: []byte("CREATE TABLE items (id INTEGER PRIMARY KEY);"),
@@ -494,13 +536,12 @@ func TestMigrate_ChangedSQLFailsClosed(t *testing.T) {
 	}
 	beforeRows := queryAppliedMigrations(t, writer)
 
-	// Modify SQL of version 2 (even whitespace change)
 	tamperedFS := fstest.MapFS{
 		"001_metadata.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+			Data: []byte(exactMetadataTableSQL),
 		},
 		"002_create_items.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE items (id INTEGER PRIMARY KEY); -- modified comment"),
+			Data: []byte("CREATE TABLE items (id INTEGER PRIMARY KEY); -- tampered"),
 		},
 	}
 
@@ -508,66 +549,10 @@ func TestMigrate_ChangedSQLFailsClosed(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected migrateFS to fail closed on changed SQL, but succeeded")
 	}
-
 	if !stringContains(err.Error(), "checksum mismatch") {
 		t.Fatalf("expected error containing 'checksum mismatch', got: %v", err)
 	}
 
-	// Verify metadata in DB is untouched
-	afterRows := queryAppliedMigrations(t, writer)
-	if len(afterRows) != len(beforeRows) {
-		t.Fatalf("metadata rows count changed: before=%d, after=%d", len(beforeRows), len(afterRows))
-	}
-	for i := range beforeRows {
-		if afterRows[i] != beforeRows[i] {
-			t.Fatalf("metadata row %d was modified: %+v vs %+v", i, afterRows[i], beforeRows[i])
-		}
-	}
-}
-
-func TestMigrate_ChangedNameFailsClosed(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	initialFS := fstest.MapFS{
-		"001_metadata.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
-		},
-		"002_create_items.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE items (id INTEGER PRIMARY KEY);"),
-		},
-	}
-
-	if err := store.migrateFS(ctx, initialFS); err != nil {
-		t.Fatalf("initial migrateFS: %v", err)
-	}
-
-	writer, err := store.writerDB()
-	if err != nil {
-		t.Fatalf("writerDB: %v", err)
-	}
-	beforeRows := queryAppliedMigrations(t, writer)
-
-	// Rename version 2 file
-	renamedFS := fstest.MapFS{
-		"001_metadata.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
-		},
-		"002_create_products.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE items (id INTEGER PRIMARY KEY);"),
-		},
-	}
-
-	err = store.migrateFS(ctx, renamedFS)
-	if err == nil {
-		t.Fatalf("expected migrateFS to fail closed on changed name, but succeeded")
-	}
-
-	if !stringContains(err.Error(), "name mismatch") {
-		t.Fatalf("expected error containing 'name mismatch', got: %v", err)
-	}
-
-	// Verify metadata was not deleted or altered
 	afterRows := queryAppliedMigrations(t, writer)
 	if len(afterRows) != len(beforeRows) {
 		t.Fatalf("metadata rows count changed: before=%d, after=%d", len(beforeRows), len(afterRows))
@@ -579,13 +564,13 @@ func TestMigrate_ChangedNameFailsClosed(t *testing.T) {
 	}
 }
 
-func TestMigrate_MissingAppliedVersionFailsClosed(t *testing.T) {
+func TestMigrate_ChangedNameFailsClosed(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
 	initialFS := fstest.MapFS{
 		"001_metadata.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+			Data: []byte(exactMetadataTableSQL),
 		},
 		"002_create_items.sql": &fstest.MapFile{
 			Data: []byte("CREATE TABLE items (id INTEGER PRIMARY KEY);"),
@@ -602,10 +587,54 @@ func TestMigrate_MissingAppliedVersionFailsClosed(t *testing.T) {
 	}
 	beforeRows := queryAppliedMigrations(t, writer)
 
-	// Missing version 2 from manifest
+	renamedFS := fstest.MapFS{
+		"001_metadata.sql": &fstest.MapFile{
+			Data: []byte(exactMetadataTableSQL),
+		},
+		"002_create_products.sql": &fstest.MapFile{
+			Data: []byte("CREATE TABLE items (id INTEGER PRIMARY KEY);"),
+		},
+	}
+
+	err = store.migrateFS(ctx, renamedFS)
+	if err == nil {
+		t.Fatalf("expected migrateFS to fail closed on changed name, but succeeded")
+	}
+	if !stringContains(err.Error(), "name mismatch") {
+		t.Fatalf("expected error containing 'name mismatch', got: %v", err)
+	}
+
+	afterRows := queryAppliedMigrations(t, writer)
+	if len(afterRows) != len(beforeRows) {
+		t.Fatalf("metadata rows count changed")
+	}
+}
+
+func TestMigrate_MissingAppliedVersionFailsClosed(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	initialFS := fstest.MapFS{
+		"001_metadata.sql": &fstest.MapFile{
+			Data: []byte(exactMetadataTableSQL),
+		},
+		"002_create_items.sql": &fstest.MapFile{
+			Data: []byte("CREATE TABLE items (id INTEGER PRIMARY KEY);"),
+		},
+	}
+
+	if err := store.migrateFS(ctx, initialFS); err != nil {
+		t.Fatalf("initial migrateFS: %v", err)
+	}
+
+	writer, err := store.writerDB()
+	if err != nil {
+		t.Fatalf("writerDB: %v", err)
+	}
+
 	missingFS := fstest.MapFS{
 		"001_metadata.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+			Data: []byte(exactMetadataTableSQL),
 		},
 	}
 
@@ -613,15 +642,13 @@ func TestMigrate_MissingAppliedVersionFailsClosed(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected migrateFS to fail closed on missing applied version, but succeeded")
 	}
-
 	if !stringContains(err.Error(), "missing from manifest") {
 		t.Fatalf("expected error containing 'missing from manifest', got: %v", err)
 	}
 
-	// Verify metadata was not deleted
 	afterRows := queryAppliedMigrations(t, writer)
-	if len(afterRows) != len(beforeRows) {
-		t.Fatalf("metadata rows count changed: before=%d, after=%d", len(beforeRows), len(afterRows))
+	if len(afterRows) != 2 {
+		t.Fatalf("metadata was deleted on failed verification")
 	}
 }
 
@@ -631,7 +658,7 @@ func TestMigrate_PendingMigrationFailureLeavesNeitherSchemaNorMetadata(t *testin
 
 	fsys := fstest.MapFS{
 		"001_metadata.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+			Data: []byte(exactMetadataTableSQL),
 		},
 		"002_fail.sql": &fstest.MapFile{
 			Data: []byte("CREATE TABLE doomed_table (id INT); INVALID SQL SYNTAX ERROR;"),
@@ -648,17 +675,13 @@ func TestMigrate_PendingMigrationFailureLeavesNeitherSchemaNorMetadata(t *testin
 		t.Fatalf("writerDB: %v", err)
 	}
 
-	// 001 succeeded
 	if !tableExists(t, writer, "schema_migrations") {
 		t.Fatalf("expected schema_migrations to exist")
 	}
-
-	// 002 schema effect rolled back
 	if tableExists(t, writer, "doomed_table") {
 		t.Fatalf("doomed_table should NOT exist after rollback")
 	}
 
-	// 002 metadata row does NOT exist
 	applied := queryAppliedMigrations(t, writer)
 	if len(applied) != 1 {
 		t.Fatalf("expected 1 applied migration, got %d", len(applied))
@@ -675,7 +698,7 @@ func TestMigrate_MetadataInsertFailureRollsBackSchemaEffect(t *testing.T) {
 
 		initialFS := fstest.MapFS{
 			"001_metadata.sql": &fstest.MapFile{
-				Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+				Data: []byte(exactMetadataTableSQL),
 			},
 		}
 		if err := store.migrateFS(ctx, initialFS); err != nil {
@@ -687,7 +710,6 @@ func TestMigrate_MetadataInsertFailureRollsBackSchemaEffect(t *testing.T) {
 			t.Fatalf("writerDB: %v", err)
 		}
 
-		// Create trigger on schema_migrations that aborts insert for version 2
 		_, err = writer.ExecContext(ctx, "CREATE TRIGGER block_v2 BEFORE INSERT ON schema_migrations WHEN NEW.version = 2 BEGIN SELECT RAISE(ABORT, 'injected trigger failure'); END;")
 		if err != nil {
 			t.Fatalf("create trigger: %v", err)
@@ -695,7 +717,7 @@ func TestMigrate_MetadataInsertFailureRollsBackSchemaEffect(t *testing.T) {
 
 		step2FS := fstest.MapFS{
 			"001_metadata.sql": &fstest.MapFile{
-				Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+				Data: []byte(exactMetadataTableSQL),
 			},
 			"002_create_doomed.sql": &fstest.MapFile{
 				Data: []byte("CREATE TABLE trigger_doomed (id INT PRIMARY KEY);"),
@@ -723,7 +745,7 @@ func TestMigrate_MetadataInsertFailureRollsBackSchemaEffect(t *testing.T) {
 
 		initialFS := fstest.MapFS{
 			"001_metadata.sql": &fstest.MapFile{
-				Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+				Data: []byte(exactMetadataTableSQL),
 			},
 		}
 		if err := store.migrateFS(ctx, initialFS); err != nil {
@@ -746,7 +768,7 @@ func TestMigrate_MetadataInsertFailureRollsBackSchemaEffect(t *testing.T) {
 
 		step2FS := fstest.MapFS{
 			"001_metadata.sql": &fstest.MapFile{
-				Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+				Data: []byte(exactMetadataTableSQL),
 			},
 			"002_create_hook_doomed.sql": &fstest.MapFile{
 				Data: []byte("CREATE TABLE hook_doomed (id INT PRIMARY KEY);"),
@@ -772,7 +794,7 @@ func TestMigrate_MetadataInsertFailureRollsBackSchemaEffect(t *testing.T) {
 	})
 }
 
-func TestMigrate_ContextCancellation(t *testing.T) {
+func TestMigrate_ContextCancellationBoundaries(t *testing.T) {
 	t.Run("cancelled before start", func(t *testing.T) {
 		store := openTestStore(t)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -795,30 +817,32 @@ func TestMigrate_ContextCancellation(t *testing.T) {
 		}
 	})
 
-	t.Run("cancelled before second migration", func(t *testing.T) {
+	t.Run("cancelled before commit", func(t *testing.T) {
 		store := openTestStore(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		fsys := fstest.MapFS{
 			"001_metadata.sql": &fstest.MapFile{
-				Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+				Data: []byte(exactMetadataTableSQL),
 			},
 			"002_step.sql": &fstest.MapFile{
 				Data: []byte("CREATE TABLE step2 (id INT);"),
 			},
 		}
 
-		origClock := clock
-		clock = func() time.Time {
-			cancel() // cancel during execution of step 1
-			return time.Now()
+		// Cancel immediately during metadata insert hook (before Commit)
+		beforeMetadataInsertHook = func(ctx context.Context, tx *sql.Tx, m Migration, appliedAt string) error {
+			if m.Version == 2 {
+				cancel()
+			}
+			return nil
 		}
-		defer func() { clock = origClock }()
+		defer func() { beforeMetadataInsertHook = nil }()
 
 		err := store.migrateFS(ctx, fsys)
 		if err == nil {
-			t.Fatalf("expected error, got nil")
+			t.Fatalf("expected cancellation error, got nil")
 		}
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
@@ -829,9 +853,308 @@ func TestMigrate_ContextCancellation(t *testing.T) {
 			t.Fatalf("writerDB: %v", err)
 		}
 
-		// step 2 should NOT have run
+		// step 2 must have rolled back
 		if tableExists(t, writer, "step2") {
-			t.Fatalf("step2 table should not exist")
+			t.Fatalf("step2 table should not exist after cancellation before commit")
+		}
+	})
+}
+
+func TestMigrate_ExactSchemaValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		schemaSQL string
+		errSubstr string
+	}{
+		{
+			name: "extra column rejected",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL UNIQUE,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL,
+  extra_col TEXT
+);`,
+			errSubstr: "want exactly 4",
+		},
+		{
+			name: "missing column rejected",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL UNIQUE,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64)
+);`,
+			errSubstr: "want exactly 4",
+		},
+		{
+			name: "wrong column order: name before version",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  name TEXT NOT NULL UNIQUE,
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL
+);`,
+			errSubstr: "column 0 is \"name\", want 'version'",
+		},
+		{
+			name: "wrong type: version TEXT",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version TEXT PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL UNIQUE,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL
+);`,
+			errSubstr: "must have type INTEGER",
+		},
+		{
+			name: "wrong type: name INTEGER",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name INTEGER NOT NULL UNIQUE,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL
+);`,
+			errSubstr: "must have type TEXT",
+		},
+		{
+			name: "wrong type: checksum BLOB",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL UNIQUE,
+  checksum BLOB NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL
+);`,
+			errSubstr: "must have type TEXT",
+		},
+		{
+			name: "wrong type: applied_at INTEGER",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL UNIQUE,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at INTEGER NOT NULL
+);`,
+			errSubstr: "must have type TEXT",
+		},
+		{
+			name: "version not PRIMARY KEY",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL UNIQUE,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL
+);`,
+			errSubstr: "must be PRIMARY KEY",
+		},
+		{
+			name: "name nullable",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT UNIQUE,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL
+);`,
+			errSubstr: "must be NOT NULL",
+		},
+		{
+			name: "checksum nullable",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL UNIQUE,
+  checksum TEXT CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL
+);`,
+			errSubstr: "must be NOT NULL",
+		},
+		{
+			name: "applied_at nullable",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL UNIQUE,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT
+);`,
+			errSubstr: "must be NOT NULL",
+		},
+		{
+			name: "name not UNIQUE",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL
+);`,
+			errSubstr: "must enforce UNIQUE constraint on 'name'",
+		},
+		{
+			name: "missing CHECK constraint on version",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  checksum TEXT NOT NULL CHECK (length(checksum) = 64),
+  applied_at TEXT NOT NULL
+);`,
+			errSubstr: "missing required CHECK constraint on version",
+		},
+		{
+			name: "missing CHECK constraint on checksum",
+			schemaSQL: `CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY CHECK (version BETWEEN 1 AND 999),
+  name TEXT NOT NULL UNIQUE,
+  checksum TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);`,
+			errSubstr: "missing required CHECK constraint on checksum",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := openTestStore(t)
+			writer, err := store.writerDB()
+			if err != nil {
+				t.Fatalf("writerDB: %v", err)
+			}
+			if _, err := writer.Exec(tt.schemaSQL); err != nil {
+				t.Fatalf("create invalid table: %v", err)
+			}
+
+			err = store.Migrate(context.Background())
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.errSubstr)
+			}
+			if !stringContains(err.Error(), tt.errSubstr) {
+				t.Fatalf("expected error containing %q, got: %v", tt.errSubstr, err)
+			}
+		})
+	}
+}
+
+func TestMigrate_AppliedAtValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		timestamp string
+		wantErr   bool
+		errSubstr string
+	}{
+		{
+			name:      "valid UTC with nanoseconds and Z suffix",
+			timestamp: "2026-09-19T12:00:00.123456789Z",
+			wantErr:   false,
+		},
+		{
+			name:      "valid UTC whole seconds with Z suffix",
+			timestamp: "2026-09-19T12:00:00Z",
+			wantErr:   false,
+		},
+		{
+			name:      "rejected timezone offset +00:00",
+			timestamp: "2026-09-19T12:00:00+00:00",
+			wantErr:   true,
+			errSubstr: "must end with 'Z' suffix",
+		},
+		{
+			name:      "rejected timezone offset +07:00",
+			timestamp: "2026-09-19T12:00:00+07:00",
+			wantErr:   true,
+			errSubstr: "must end with 'Z' suffix",
+		},
+		{
+			name:      "rejected timezone offset -05:00",
+			timestamp: "2026-09-19T12:00:00-05:00",
+			wantErr:   true,
+			errSubstr: "must end with 'Z' suffix",
+		},
+		{
+			name:      "rejected space separated date time",
+			timestamp: "2026-09-19 12:00:00Z",
+			wantErr:   true,
+			errSubstr: "is not valid RFC3339Nano",
+		},
+		{
+			name:      "rejected arbitrary string",
+			timestamp: "not-a-timestamp",
+			wantErr:   true,
+			errSubstr: "must end with 'Z' suffix",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAppliedAt(tt.timestamp)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.errSubstr)
+				}
+				if !stringContains(err.Error(), tt.errSubstr) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errSubstr, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestMigrate_MetadataRowIntegrityRejection(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("uppercase hex checksum rejected", func(t *testing.T) {
+		store := openTestStore(t)
+		if err := store.Migrate(ctx); err != nil {
+			t.Fatalf("migrate: %v", err)
+		}
+		writer, _ := store.writerDB()
+		_, err := writer.ExecContext(ctx, "UPDATE schema_migrations SET checksum = 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855' WHERE version = 1;")
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		err = store.Migrate(ctx)
+		if err == nil {
+			t.Fatalf("expected error on uppercase checksum in metadata")
+		}
+		if !stringContains(err.Error(), "lowercase hexadecimal") {
+			t.Fatalf("expected 'lowercase hexadecimal' in error, got: %v", err)
+		}
+	})
+
+	t.Run("non-hex checksum rejected", func(t *testing.T) {
+		store := openTestStore(t)
+		if err := store.Migrate(ctx); err != nil {
+			t.Fatalf("migrate: %v", err)
+		}
+		writer, _ := store.writerDB()
+		_, err := writer.ExecContext(ctx, "UPDATE schema_migrations SET checksum = 'g3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85z' WHERE version = 1;")
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		err = store.Migrate(ctx)
+		if err == nil {
+			t.Fatalf("expected error on non-hex checksum in metadata")
+		}
+		if !stringContains(err.Error(), "lowercase hexadecimal") {
+			t.Fatalf("expected 'lowercase hexadecimal' in error, got: %v", err)
+		}
+	})
+
+	t.Run("offset timestamp in table rejected", func(t *testing.T) {
+		store := openTestStore(t)
+		if err := store.Migrate(ctx); err != nil {
+			t.Fatalf("migrate: %v", err)
+		}
+		writer, _ := store.writerDB()
+		_, err := writer.ExecContext(ctx, "UPDATE schema_migrations SET applied_at = '2026-09-19T12:00:00+00:00' WHERE version = 1;")
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		err = store.Migrate(ctx)
+		if err == nil {
+			t.Fatalf("expected error on offset timestamp in metadata")
+		}
+		if !stringContains(err.Error(), "must end with 'Z' suffix") {
+			t.Fatalf("expected 'must end with 'Z' suffix' in error, got: %v", err)
 		}
 	})
 }
@@ -868,7 +1191,6 @@ func TestMigrate_NoProductSchemaCreatedByP1B(t *testing.T) {
 		t.Fatalf("expected ONLY [schema_migrations] table, got: %v", tables)
 	}
 
-	// Explicitly check known product tables
 	forbiddenTables := []string{
 		"sessions", "session",
 		"roles", "role", "role_runs",
@@ -892,7 +1214,7 @@ func TestMigrate_TwoSeparateDatabasesNeverShareState(t *testing.T) {
 
 	fsys1 := fstest.MapFS{
 		"001_metadata.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+			Data: []byte(exactMetadataTableSQL),
 		},
 		"002_db1_table.sql": &fstest.MapFile{
 			Data: []byte("CREATE TABLE db1_table (id INT);"),
@@ -906,20 +1228,17 @@ func TestMigrate_TwoSeparateDatabasesNeverShareState(t *testing.T) {
 	writer1, _ := store1.writerDB()
 	writer2, _ := store2.writerDB()
 
-	// Store 1 has schema_migrations and db1_table
 	if !tableExists(t, writer1, "schema_migrations") || !tableExists(t, writer1, "db1_table") {
 		t.Fatalf("store1 tables missing")
 	}
 
-	// Store 2 has NO tables
 	if tableExists(t, writer2, "schema_migrations") || tableExists(t, writer2, "db1_table") {
 		t.Fatalf("store2 saw store1's tables!")
 	}
 
-	// Now migrate store 2 with independent tables
 	fsys2 := fstest.MapFS{
 		"001_metadata.sql": &fstest.MapFile{
-			Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+			Data: []byte(exactMetadataTableSQL),
 		},
 		"002_db2_table.sql": &fstest.MapFile{
 			Data: []byte("CREATE TABLE db2_table (id INT);"),
@@ -937,7 +1256,7 @@ func TestMigrate_TwoSeparateDatabasesNeverShareState(t *testing.T) {
 	}
 }
 
-func TestMigrate_EdgeCasesAndInvalidMetadata(t *testing.T) {
+func TestMigrate_EdgeCases(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("nil store", func(t *testing.T) {
@@ -974,10 +1293,9 @@ func TestMigrate_EdgeCasesAndInvalidMetadata(t *testing.T) {
 
 	t.Run("unapplied migration lower than max applied version fails closed", func(t *testing.T) {
 		store := openTestStore(t)
-		// Apply 001 and 003
 		gapFS := fstest.MapFS{
 			"001_metadata.sql": &fstest.MapFile{
-				Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+				Data: []byte(exactMetadataTableSQL),
 			},
 			"003_three.sql": &fstest.MapFile{
 				Data: []byte("CREATE TABLE t3 (id INT);"),
@@ -987,10 +1305,9 @@ func TestMigrate_EdgeCasesAndInvalidMetadata(t *testing.T) {
 			t.Fatalf("gapFS migrate: %v", err)
 		}
 
-		// Now add 002
 		with002FS := fstest.MapFS{
 			"001_metadata.sql": &fstest.MapFile{
-				Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+				Data: []byte(exactMetadataTableSQL),
 			},
 			"002_two.sql": &fstest.MapFile{
 				Data: []byte("CREATE TABLE t2 (id INT);"),
@@ -1008,75 +1325,11 @@ func TestMigrate_EdgeCasesAndInvalidMetadata(t *testing.T) {
 		}
 	})
 
-	t.Run("corrupted metadata in table - invalid name", func(t *testing.T) {
-		store := openTestStore(t)
-		if err := store.Migrate(ctx); err != nil {
-			t.Fatalf("migrate: %v", err)
-		}
-		writer, _ := store.writerDB()
-		_, err := writer.ExecContext(ctx, "UPDATE schema_migrations SET name = 'Invalid-Name' WHERE version = 1;")
-		if err != nil {
-			t.Fatalf("update: %v", err)
-		}
-		err = store.Migrate(ctx)
-		if err == nil {
-			t.Fatalf("expected error on invalid migration name in metadata")
-		}
-	})
-
-	t.Run("corrupted metadata in table - invalid checksum", func(t *testing.T) {
-		store := openTestStore(t)
-		if err := store.Migrate(ctx); err != nil {
-			t.Fatalf("migrate: %v", err)
-		}
-		writer, _ := store.writerDB()
-		_, err := writer.ExecContext(ctx, "UPDATE schema_migrations SET checksum = 'not-a-valid-hex' WHERE version = 1;")
-		if err != nil {
-			t.Fatalf("update: %v", err)
-		}
-		err = store.Migrate(ctx)
-		if err == nil {
-			t.Fatalf("expected error on invalid checksum in metadata")
-		}
-	})
-
-	t.Run("corrupted metadata in table - invalid timestamp", func(t *testing.T) {
-		store := openTestStore(t)
-		if err := store.Migrate(ctx); err != nil {
-			t.Fatalf("migrate: %v", err)
-		}
-		writer, _ := store.writerDB()
-		_, err := writer.ExecContext(ctx, "UPDATE schema_migrations SET applied_at = 'not-a-timestamp' WHERE version = 1;")
-		if err != nil {
-			t.Fatalf("update: %v", err)
-		}
-		err = store.Migrate(ctx)
-		if err == nil {
-			t.Fatalf("expected error on invalid timestamp in metadata")
-		}
-	})
-
-	t.Run("schema_migrations table missing required column", func(t *testing.T) {
-		store := openTestStore(t)
-		writer, _ := store.writerDB()
-		_, err := writer.ExecContext(ctx, "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);")
-		if err != nil {
-			t.Fatalf("exec: %v", err)
-		}
-		err = store.Migrate(ctx)
-		if err == nil {
-			t.Fatalf("expected error when schema_migrations misses columns")
-		}
-		if !stringContains(err.Error(), "missing required column") {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-
 	t.Run("multiple SQL statements in single migration", func(t *testing.T) {
 		store := openTestStore(t)
 		multiFS := fstest.MapFS{
 			"001_metadata.sql": &fstest.MapFile{
-				Data: []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);"),
+				Data: []byte(exactMetadataTableSQL),
 			},
 			"002_multi.sql": &fstest.MapFile{
 				Data: []byte("CREATE TABLE t_multi_1 (id INT); CREATE TABLE t_multi_2 (id INT);"),

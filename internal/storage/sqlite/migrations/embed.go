@@ -2,7 +2,7 @@ package migrations
 
 import "embed"
 
-// FS contains the embedded migration SQL files.
+// FS embeds the complete migrations directory.
 //
-//go:embed *.sql
+//go:embed *
 var FS embed.FS

@@ -19,7 +19,7 @@ import (
 
 const (
 	migrationMetadataTable = "schema_migrations"
-	// Timestamp representation is UTC in RFC3339Nano format (e.g. 2026-09-19T12:00:00.123456789Z).
+	// Timestamp representation is UTC in RFC3339Nano format with 'Z' suffix (e.g. 2026-09-19T12:00:00.123456789Z).
 	timestampFormat = time.RFC3339Nano
 )
 
@@ -143,6 +143,10 @@ func migrateDB(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 }
 
 func applyMigration(ctx context.Context, db *sql.DB, m Migration) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled before migration %03d (%s): %w", m.Version, m.Name, err)
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction for migration %03d (%s): %w", m.Version, m.Name, sanitizeErr(err, ""))
@@ -154,8 +158,16 @@ func applyMigration(ctx context.Context, db *sql.DB, m Migration) error {
 		}
 	}()
 
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled before SQL execution %03d (%s): %w", m.Version, m.Name, err)
+	}
+
 	if _, err := tx.ExecContext(ctx, string(m.SQL)); err != nil {
 		return fmt.Errorf("execute migration %03d (%s): %w", m.Version, m.Name, sanitizeErr(err, ""))
+	}
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled before metadata insert %03d (%s): %w", m.Version, m.Name, err)
 	}
 
 	appliedAt := clock().UTC().Format(timestampFormat)
@@ -170,11 +182,25 @@ func applyMigration(ctx context.Context, db *sql.DB, m Migration) error {
 		return fmt.Errorf("record migration metadata %03d (%s): %w", m.Version, m.Name, sanitizeErr(err, ""))
 	}
 
+	// Check cancellation immediately before Commit starts.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled before commit %03d (%s): %w", m.Version, m.Name, err)
+	}
+
+	// Once Commit starts, its outcome is authoritative.
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration %03d (%s): %w", m.Version, m.Name, sanitizeErr(err, ""))
 	}
 	committed = true
 	return nil
+}
+
+type tableColInfo struct {
+	cid     int
+	name    string
+	colType string
+	notnull int
+	pk      int
 }
 
 func loadAppliedMigrations(ctx context.Context, db *sql.DB) (bool, []AppliedMigration, error) {
@@ -187,13 +213,27 @@ func loadAppliedMigrations(ctx context.Context, db *sql.DB) (bool, []AppliedMigr
 		return false, nil, nil
 	}
 
+	// 1. Validate exact table DDL constraints from sqlite_master
+	var createSQL string
+	err = db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations';").Scan(&createSQL)
+	if err != nil {
+		return false, nil, fmt.Errorf("query schema_migrations definition: %w", sanitizeErr(err, ""))
+	}
+	normSQL := strings.ToLower(createSQL)
+	if !strings.Contains(normSQL, "version between 1 and 999") && !strings.Contains(normSQL, "version >= 1 and version <= 999") {
+		return false, nil, errors.New("schema_migrations table missing required CHECK constraint on version (version BETWEEN 1 AND 999)")
+	}
+	if !strings.Contains(normSQL, "length(checksum) = 64") && !strings.Contains(normSQL, "length(checksum)=64") {
+		return false, nil, errors.New("schema_migrations table missing required CHECK constraint on checksum (length(checksum) = 64)")
+	}
+
+	// 2. Validate columns, exact count (4), exact order, types, NOT NULL, and PRIMARY KEY
 	rows, err := db.QueryContext(ctx, "PRAGMA table_info(schema_migrations);")
 	if err != nil {
 		return false, nil, fmt.Errorf("query schema_migrations schema: %w", sanitizeErr(err, ""))
 	}
-	defer rows.Close()
 
-	colFound := make(map[string]bool)
+	var cols []tableColInfo
 	for rows.Next() {
 		var (
 			cid     int
@@ -204,21 +244,134 @@ func loadAppliedMigrations(ctx context.Context, db *sql.DB) (bool, []AppliedMigr
 			pk      int
 		)
 		if err := rows.Scan(&cid, &colName, &colType, &notNull, &dfltVal, &pk); err != nil {
+			rows.Close()
 			return false, nil, fmt.Errorf("scan table_info: %w", sanitizeErr(err, ""))
 		}
-		colFound[colName] = true
+		cols = append(cols, tableColInfo{
+			cid:     cid,
+			name:    colName,
+			colType: strings.ToUpper(colType),
+			notnull: notNull,
+			pk:      pk,
+		})
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
 		return false, nil, fmt.Errorf("iterate table_info: %w", sanitizeErr(err, ""))
 	}
 
-	requiredCols := []string{"version", "name", "checksum", "applied_at"}
-	for _, req := range requiredCols {
-		if !colFound[req] {
-			return false, nil, fmt.Errorf("schema_migrations table is missing required column %q", req)
-		}
+	if len(cols) != 4 {
+		return false, nil, fmt.Errorf("schema_migrations table has %d columns, want exactly 4", len(cols))
 	}
 
+	// Column 0: version INTEGER PRIMARY KEY
+	if cols[0].name != "version" {
+		return false, nil, fmt.Errorf("column 0 is %q, want 'version'", cols[0].name)
+	}
+	if cols[0].colType != "INTEGER" {
+		return false, nil, fmt.Errorf("column 'version' must have type INTEGER, got %q", cols[0].colType)
+	}
+	if cols[0].pk != 1 {
+		return false, nil, errors.New("column 'version' must be PRIMARY KEY")
+	}
+
+	// Column 1: name TEXT NOT NULL UNIQUE
+	if cols[1].name != "name" {
+		return false, nil, fmt.Errorf("column 1 is %q, want 'name'", cols[1].name)
+	}
+	if cols[1].colType != "TEXT" {
+		return false, nil, fmt.Errorf("column 'name' must have type TEXT, got %q", cols[1].colType)
+	}
+	if cols[1].notnull != 1 {
+		return false, nil, errors.New("column 'name' must be NOT NULL")
+	}
+	if cols[1].pk != 0 {
+		return false, nil, errors.New("column 'name' must not be PRIMARY KEY")
+	}
+
+	// Column 2: checksum TEXT NOT NULL
+	if cols[2].name != "checksum" {
+		return false, nil, fmt.Errorf("column 2 is %q, want 'checksum'", cols[2].name)
+	}
+	if cols[2].colType != "TEXT" {
+		return false, nil, fmt.Errorf("column 'checksum' must have type TEXT, got %q", cols[2].colType)
+	}
+	if cols[2].notnull != 1 {
+		return false, nil, errors.New("column 'checksum' must be NOT NULL")
+	}
+	if cols[2].pk != 0 {
+		return false, nil, errors.New("column 'checksum' must not be PRIMARY KEY")
+	}
+
+	// Column 3: applied_at TEXT NOT NULL
+	if cols[3].name != "applied_at" {
+		return false, nil, fmt.Errorf("column 3 is %q, want 'applied_at'", cols[3].name)
+	}
+	if cols[3].colType != "TEXT" {
+		return false, nil, fmt.Errorf("column 'applied_at' must have type TEXT, got %q", cols[3].colType)
+	}
+	if cols[3].notnull != 1 {
+		return false, nil, errors.New("column 'applied_at' must be NOT NULL")
+	}
+	if cols[3].pk != 0 {
+		return false, nil, errors.New("column 'applied_at' must not be PRIMARY KEY")
+	}
+
+	// 3. Validate UNIQUE constraint on 'name' via SQLite index list
+	type idxEntry struct {
+		name   string
+		unique bool
+	}
+	var indexes []idxEntry
+	idxRows, err := db.QueryContext(ctx, "PRAGMA index_list(schema_migrations);")
+	if err != nil {
+		return false, nil, fmt.Errorf("query index_list: %w", sanitizeErr(err, ""))
+	}
+	for idxRows.Next() {
+		var seq int
+		var name, origin string
+		var unique, partial int
+		if err := idxRows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			idxRows.Close()
+			return false, nil, fmt.Errorf("scan index_list: %w", sanitizeErr(err, ""))
+		}
+		indexes = append(indexes, idxEntry{name: name, unique: unique == 1})
+	}
+	idxRows.Close()
+	if err := idxRows.Err(); err != nil {
+		return false, nil, fmt.Errorf("iterate index_list: %w", sanitizeErr(err, ""))
+	}
+
+	hasUniqueName := false
+	for _, idx := range indexes {
+		if !idx.unique {
+			continue
+		}
+		infoRows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA index_info(%s);", idx.name))
+		if err != nil {
+			return false, nil, fmt.Errorf("query index_info: %w", sanitizeErr(err, ""))
+		}
+		var colsInIndex []string
+		for infoRows.Next() {
+			var seqno, cid int
+			var colName string
+			if err := infoRows.Scan(&seqno, &cid, &colName); err != nil {
+				infoRows.Close()
+				return false, nil, fmt.Errorf("scan index_info: %w", sanitizeErr(err, ""))
+			}
+			colsInIndex = append(colsInIndex, colName)
+		}
+		infoRows.Close()
+		if len(colsInIndex) == 1 && colsInIndex[0] == "name" {
+			hasUniqueName = true
+			break
+		}
+	}
+	if !hasUniqueName {
+		return false, nil, errors.New("schema_migrations table must enforce UNIQUE constraint on 'name'")
+	}
+
+	// 4. Load and validate existing metadata rows
 	qRows, err := db.QueryContext(ctx, "SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version ASC;")
 	if err != nil {
 		return false, nil, fmt.Errorf("select schema_migrations: %w", sanitizeErr(err, ""))
@@ -227,6 +380,7 @@ func loadAppliedMigrations(ctx context.Context, db *sql.DB) (bool, []AppliedMigr
 
 	var applied []AppliedMigration
 	seenVersions := make(map[int]bool)
+	seenNames := make(map[string]bool)
 	for qRows.Next() {
 		var am AppliedMigration
 		if err := qRows.Scan(&am.Version, &am.Name, &am.Checksum, &am.AppliedAt); err != nil {
@@ -242,13 +396,15 @@ func loadAppliedMigrations(ctx context.Context, db *sql.DB) (bool, []AppliedMigr
 		if !migrationNameRegex.MatchString(am.Name) {
 			return false, nil, fmt.Errorf("invalid migration name %q in schema_migrations", am.Name)
 		}
-		if len(am.Checksum) != 64 || !isHex(am.Checksum) {
-			return false, nil, fmt.Errorf("invalid checksum %q in schema_migrations: must be 64 lowercase hex characters", am.Checksum)
+		if seenNames[am.Name] {
+			return false, nil, fmt.Errorf("duplicate migration name %q in schema_migrations", am.Name)
 		}
-		if _, err := time.Parse(time.RFC3339Nano, am.AppliedAt); err != nil {
-			if _, err := time.Parse(time.RFC3339, am.AppliedAt); err != nil {
-				return false, nil, fmt.Errorf("invalid applied_at timestamp %q in schema_migrations: %w", am.AppliedAt, err)
-			}
+		seenNames[am.Name] = true
+		if len(am.Checksum) != 64 || !isLowerHex(am.Checksum) {
+			return false, nil, fmt.Errorf("invalid checksum %q in schema_migrations: must be exact 64 lowercase hexadecimal characters", am.Checksum)
+		}
+		if err := validateAppliedAt(am.AppliedAt); err != nil {
+			return false, nil, err
 		}
 		applied = append(applied, am)
 	}
@@ -259,49 +415,59 @@ func loadAppliedMigrations(ctx context.Context, db *sql.DB) (bool, []AppliedMigr
 	return true, applied, nil
 }
 
+func validateAppliedAt(s string) error {
+	if !strings.HasSuffix(s, "Z") {
+		return fmt.Errorf("applied_at timestamp %q must end with 'Z' suffix (timezone offsets rejected)", s)
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return fmt.Errorf("applied_at timestamp %q is not valid RFC3339Nano: %w", s, err)
+	}
+	if _, offset := t.Zone(); offset != 0 {
+		return fmt.Errorf("applied_at timestamp %q must be in UTC", s)
+	}
+	return nil
+}
+
 func discoverManifest(fsys fs.FS) ([]Migration, error) {
 	if fsys == nil {
 		return nil, errors.New("migration filesystem cannot be nil")
 	}
 
-	entries, err := fs.ReadDir(fsys, ".")
-	if err != nil {
-		return nil, fmt.Errorf("read migration directory: %w", err)
-	}
-
 	var manifest []Migration
 	seenVersions := make(map[int]string)
 
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() {
-			hasFiles := false
-			err := fs.WalkDir(fsys, name, func(path string, d fs.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				if !d.IsDir() {
-					hasFiles = true
-					return fs.SkipAll
-				}
-				return nil
-			})
-			if err != nil {
-				return nil, fmt.Errorf("inspect subdirectory %q: %w", name, err)
-			}
-			if hasFiles {
-				return nil, fmt.Errorf("manifest contains non-empty subdirectory %q: nested migrations are rejected", name)
-			}
-			continue
+	err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == "." {
+			return nil
 		}
 
+		// Reject any file located inside a nested directory.
+		if strings.Contains(path, "/") {
+			if !d.IsDir() {
+				dir := path[:strings.LastIndex(path, "/")]
+				return fmt.Errorf("manifest contains non-empty nested directory %q: nested migrations are rejected", dir)
+			}
+			return nil
+		}
+
+		// Top-level directories are traversed by WalkDir.
+		if d.IsDir() {
+			return nil
+		}
+
+		name := d.Name()
+		// Non-SQL files such as README.md or embed.go are ignored at the top level.
 		if !strings.HasSuffix(name, ".sql") {
-			continue
+			return nil
 		}
 
 		matches := migrationFilenameRegex.FindStringSubmatch(name)
 		if matches == nil {
-			return nil, fmt.Errorf("top-level SQL file %q does not match migration filename pattern ^[0-9]{3}_[a-z][a-z0-9_]*\\.sql$", name)
+			return fmt.Errorf("top-level SQL file %q does not match migration filename pattern ^[0-9]{3}_[a-z][a-z0-9_]*\\.sql$", name)
 		}
 
 		versionStr := matches[1]
@@ -309,20 +475,20 @@ func discoverManifest(fsys fs.FS) ([]Migration, error) {
 
 		version, err := strconv.Atoi(versionStr)
 		if err != nil || version < 1 || version > 999 {
-			return nil, fmt.Errorf("invalid migration version %q in %q: must be decimal 001 through 999", versionStr, name)
+			return fmt.Errorf("invalid migration version %q in %q: must be decimal 001 through 999", versionStr, name)
 		}
 
 		if existingFile, exists := seenVersions[version]; exists {
-			return nil, fmt.Errorf("duplicate migration version %03d: %q and %q", version, existingFile, name)
+			return fmt.Errorf("duplicate migration version %03d: %q and %q", version, existingFile, name)
 		}
 		seenVersions[version] = name
 
 		content, err := fs.ReadFile(fsys, name)
 		if err != nil {
-			return nil, fmt.Errorf("read migration file %q: %w", name, err)
+			return fmt.Errorf("read migration file %q: %w", name, err)
 		}
 		if len(content) == 0 {
-			return nil, fmt.Errorf("migration file %q is empty", name)
+			return fmt.Errorf("migration file %q is empty", name)
 		}
 
 		hash := sha256.Sum256(content)
@@ -334,6 +500,10 @@ func discoverManifest(fsys fs.FS) ([]Migration, error) {
 			Checksum: checksum,
 			SQL:      content,
 		})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("discover migration manifest: %w", err)
 	}
 
 	sort.Slice(manifest, func(i, j int) bool {
@@ -343,7 +513,10 @@ func discoverManifest(fsys fs.FS) ([]Migration, error) {
 	return manifest, nil
 }
 
-func isHex(s string) bool {
+func isLowerHex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
 	for _, c := range s {
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
 			return false
