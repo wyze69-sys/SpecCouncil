@@ -4,6 +4,78 @@ This file records what the engine implements, and marks every place where the
 specification has not frozen a decision. Unfrozen choices are isolated in one
 place in the code so that freezing the specification is a one-line change.
 
+## Canonical simple flow
+
+This is the product flow. Keep control paths separate from the main line.
+
+```text
+Submit design
+→ authenticate, authorize, validate
+→ normalize request + compute request hash
+→ idempotency check
+→ atomically create:
+     immutable snapshot
+     queued review session
+     4 pending reviewer roles
+
+→ worker claims one queued session
+
+→ dispatch up to 2 roles concurrently
+→ each role receives the same frozen snapshot
+
+→ check model token budget
+→ provider call 1
+
+→ classify result:
+     valid response → validate output
+     retryable transport failure → optional transport retry
+     invalid structured output → optional format repair
+     fatal failure → no second call
+
+→ maximum 2 provider calls per role
+
+→ strict JSON + schema + basis-reference validation
+
+→ atomically persist terminal role result:
+     success → findings + COMPLETE role
+     execution failure → FAILED role
+     cancel / cutoff / restart → INTERRUPTED role
+
+→ dispatch remaining roles until all 4 are terminal
+
+→ deterministic composer
+→ COMPLETE / PARTIAL / FAILED
+
+→ read-only status/report
+```
+
+### Separate control paths
+
+```text
+Cancellation
+→ stop new dispatch
+→ pending roles become interrupted
+→ in-flight roles may finish
+
+Dispatch cutoff
+→ stop new dispatch
+→ remaining pending roles become interrupted
+
+Process restart
+→ stale pending/in-flight roles become interrupted
+→ no provider work is replayed
+
+Session hard deadline
+→ locally abort every in-flight provider request at the deadline
+→ no retry, repair, or new dispatch after the deadline
+→ terminalize unfinished roles as interrupted
+```
+
+The hard-deadline guarantee applies to SpecCouncil's local provider request: its
+context is cancelled and its HTTP connection is closed at the deadline. A remote
+provider may continue computation after the client disconnects; SpecCouncil
+cannot prove or control that external behavior.
+
 ## Confirmed contract implemented
 
 ### Canonical roles
