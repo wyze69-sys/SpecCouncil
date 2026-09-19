@@ -1,363 +1,405 @@
-# SpecCouncil Build Map for Cline
+# SpecCouncil Persistence Build Map for Cline
 
 ## Purpose
 
-This is the execution map for finishing SpecCouncil without asking one coding
-agent to invent or implement the whole system at once. Work is divided into
-small, independently verified slices. Only one slice is executed at a time.
-
-The current phase ends when the SQLite persistence foundation is complete and
-proven. Worker orchestration, HTTP, authentication, a live provider, and UI are
-later phases and must not leak into these slices.
+Build the SQLite persistence foundation in small, independently verified slices.
+Only one packet is executed per Cline invocation. This phase ends with durable,
+race-tested persistence; worker orchestration, HTTP/auth, live providers, and UI
+remain separate later phases.
 
 ## Authority
 
-Read in this order before every slice:
+Read in this order for every slice:
 
-1. `docs/CANONICAL-FLOW.md` — runtime behavior; highest authority.
-2. The current slice packet in this directory.
+1. `docs/CANONICAL-FLOW.md` — runtime authority.
+2. The current packet in this directory.
 3. Existing Go code and tests.
-4. `docs/ENGINE-CONTRACT.md` — current implementation gaps only.
+4. `docs/ENGINE-CONTRACT.md` — implementation gaps only.
 
-If code, comments, or old tests conflict with `CANONICAL-FLOW.md`, the canonical
-flow wins. Do not silently alter the canonical flow. Record a blocker instead.
+If code or old tests conflict with the canonical flow, the canonical flow wins.
+Workers may not edit it or silently invent a replacement rule.
 
 ## Execution protocol
 
-For every slice, Cline must follow this loop:
-
 ```text
 UNDERSTAND
--> inspect git status and the named source files
--> restate the slice boundary internally
-
+→ inspect clean Git state and named files
 IMPLEMENT
--> make only the slice's changes
--> preserve unrelated work
-
+→ change only the current slice
 TEST
--> run focused tests
--> run gofmt, full tests, vet, and git diff checks
-
+→ focused tests, then the full gate
 FIX
--> investigate every failure
--> rerun focused checks after each repair
-
+→ repair every failure and rerun
 VERIFY
--> inspect the final diff against every acceptance item
--> prove no forbidden scope was changed
-
+→ inspect final diff against every acceptance item
 COMMIT
--> commit only after every gate passes
--> never push
-
+→ only after all gates pass; never push
 REPORT
--> exact commit
--> changed files
--> commands and real results
--> acceptance evidence
--> remaining limitations
--> STOP
+→ real commands, results, files, limitations, clean status
+STOP
 ```
 
-One packet equals one Cline execution. Never execute two packets together. If a
-slice fails, repair that slice; do not begin the next one. Hermes independently
-verifies each report before the next packet is written or released.
+One packet equals one invocation. A failed slice is repaired; the next slice does
+not start. Hermes verifies every result before releasing its successor packet.
 
 ## Global rules
 
-- Repository: `D:\PROJECT\SpecCouncil`
-- Language: Go 1.27.1.
-- Use `modernc.org/sqlite` for a pure-Go SQLite driver; do not introduce CGO.
-- Use `database/sql`; do not add an ORM or query builder.
-- Use embedded, numbered SQL migrations. Applied migrations are immutable.
-- Provider calls never run inside database transactions.
-- Write-critical operations use a dedicated connection with explicit
-  `BEGIN IMMEDIATE`; do not assume `sql.Tx` begins an immediate transaction.
-- The immediate-transaction helper retries only SQLite busy/locked failures, at
-  most the configured `DB_RETRIES`, then returns a typed persistence-unavailable
-  error. Validation, conflict, not-found, and invariant errors are never retried.
-- Every connection must enforce foreign keys and a bounded busy timeout.
-- Use WAL mode for the file-backed database.
-- Persistence/concurrency tests use a real file in `t.TempDir()`, not a separate
-  `:memory:` database per connection.
-- Store UTC timestamps in one documented representation and compare them
-  consistently.
-- Never store provider credentials, prompts containing secrets, or raw provider
-  error bodies.
-- No hidden fallback behavior. Return typed errors.
-- No API, authentication implementation, live provider, worker pool, web UI,
-  cross-review, leases, heartbeats, broker, or automatic provider replay in this
-  phase.
-- Do not edit `docs/CANONICAL-FLOW.md` from an implementation slice.
-- Do not push or configure a Git remote.
+- Repository: `D:\PROJECT\SpecCouncil`; Go 1.27.1.
+- Use `database/sql` with pure-Go `modernc.org/sqlite`; no CGO or ORM.
+- Use embedded numbered migrations. Record and verify an SHA-256 checksum for
+  every applied migration; changed applied SQL fails closed.
+- Applied migrations are never edited. Corrections are new migrations.
+- Write-critical operations use a dedicated connection and explicit
+  `BEGIN IMMEDIATE`; do not assume `sql.Tx` is immediate.
+- The reusable immediate-transaction boundary retries only SQLite busy/locked
+  failures, at most configured `DB_RETRIES`, then returns a typed
+  persistence-unavailable error. Never retry conflicts, validation, not-found,
+  invariant, or stale-write errors.
+- Every connection enforces foreign keys and bounded busy timeout. The file DB
+  uses WAL. Report queries use a real read-only connection/pool.
+- Concurrency tests use a real file under `t.TempDir()`, not independent
+  `:memory:` connections. Synchronize races with barriers, never sleeps.
+- Use one documented UTC timestamp representation.
+- Never persist credentials, secret-bearing prompts, or raw provider errors.
+- No admission cap in v1.
+- No splitter may be invented in this phase. Persistence receives an already
+  frozen `evidence.Snapshot` plus the original title/content used for request
+  hashing. Input-to-evidence splitting belongs to a later ingestion contract.
+- No HTTP, auth implementation, live provider, worker goroutines, process lock,
+  UI, cross-review, leases, heartbeats, broker, or provider replay.
+- Do not edit `docs/CANONICAL-FLOW.md` or add progress narrative to README.
+- Do not configure a remote or push.
 
-## Verification gate after every slice
-
-Run from the repository root:
+## Gate after every slice
 
 ```bash
-gofmt -w <changed-go-files>
 test -z "$(gofmt -l .)"
-go test ./...
+go test ./... -count=1
 go vet ./...
 git diff --check
 git status --short
 ```
 
-The slice packet adds focused commands. A commit is permitted only after the
-focused checks and this full gate pass.
+A packet adds focused checks. Commit only when both focused and full gates pass.
 
-## Persistence phase DAG
+## DAG
 
 ```text
 P0 Canonical domain alignment
  |
  v
-P1 SQLite schema + migration runner
+P1 Store opening + migration runner + busy retry boundary
  |
  v
-P2 Atomic submission + idempotency
+P2 Core schema
  |
- +-------------------+
- |                   |
- v                   v
-P3 Snapshot/session  P4 Claim/cancel/guarded dispatch
-read models           |
- |                   |
- +---------+---------+
-           v
-P5 Atomic role publication
-           |
-           v
-P6 Interruption + restart recovery
-           |
-           v
-P7 Transactional composer + report reads
-           |
-           v
-P8 Persistence integration and race gate
+ v
+P3 Transition, citation, and immutability guards
+ |
+ v
+P4 Atomic submission + idempotency
+ |\
+ | +--------------------+
+ v                      v
+P5 Read models       P6 FIFO claim + timing policy
+ |                      |
+ |                   P7 Cancel request
+ |                      |
+ +-------------------P8 Guarded dispatch
+             \          /
+              v        v
+              P9 Atomic role publication
+                       |
+                       v
+              P10 Control sweeps + restart recovery
+                       |
+                       v
+              P11 Transactional composer + report reads
+                       |
+                       v
+              P12 Integration and race gate
 ```
 
 ## Slice index
 
 | Slice | Deliverable | Depends on | Status |
 |---|---|---|---|
-| P0 | Align domain/composer with the approved state and reason model | current core | READY |
-| P1 | Open SQLite store, migrations, schema constraints, transition guards | P0 | BLOCKED |
-| P2 | Request hash v1 and atomic create/idempotency behavior | P1 | BLOCKED |
-| P3 | Deterministic snapshot, session, role, and finding read models | P2 | BLOCKED |
-| P4 | FIFO claim, cancellation flag, and guarded dispatch transaction | P2 | BLOCKED |
-| P5 | Compare-and-set success/failure publication with findings | P3, P4 | BLOCKED |
-| P6 | Cancel/cutoff/hard-deadline interruption and restart recovery | P5 | BLOCKED |
-| P7 | Transactional gate/composer and read-only deterministic report | P6 | BLOCKED |
-| P8 | File-backed integration, concurrency, rollback, and race proof | P7 | BLOCKED |
+| P0 | Canonical composer/reason/count/report contract | current core | READY |
+| P1 | SQLite open/close, checksummed migrator, read-only pool, bounded busy retry | P0 | BLOCKED |
+| P2 | Core tables, enum/check/FK/unique constraints | P1 | BLOCKED |
+| P3 | State-transition, citation, and immutability triggers | P2 | BLOCKED |
+| P4 | Request hash v1 and atomic create/idempotency | P3 | BLOCKED |
+| P5 | Deterministic read models | P4 | BLOCKED |
+| P6 | Validated timing policy and single-session FIFO claim | P4 | BLOCKED |
+| P7 | Idempotent cancellation request mutation | P6 | BLOCKED |
+| P8 | Deterministic guarded dispatch and cancel race | P7 | BLOCKED |
+| P9 | Compare-and-set success/failure publication | P5, P8 | BLOCKED |
+| P10 | Cancel/cutoff/deadline sweeps and restart recovery | P9 | BLOCKED |
+| P11 | Transactional composition and terminal-only report reads | P10 | BLOCKED |
+| P12 | End-to-end persistence and concurrency proof | P11 | BLOCKED |
 
-Only P0 has an executable packet now. Later packets are finalized after their
-dependencies are independently verified, so they can cite real APIs and file
-paths instead of guesses.
+Only P0 has an executable packet now. Later packets are written after predecessor
+verification so they cite real APIs and paths rather than guesses.
 
 ## Slice contracts
 
 ### P0 — Canonical domain alignment
 
-Goal: remove stale in-memory semantics before encoding them in SQLite.
+Remove stale semantics before they enter the schema:
 
-Required result:
+- add `role_failures` and canonical reason/cause validators;
+- composer reasons come from role interruption causes, not cancel flag;
+- keep `cancel_requested` independently on the report/read model;
+- implement canonical status/reason precedence;
+- rename failed count to incomplete count and JSON field;
+- test all status, reason, cause, count, and JSON cases.
 
-- Terminal reason includes `role_failures`.
-- Composer derives the reason from role interruption causes, not a live cancel
-  flag.
-- Status and reason precedence exactly match the canonical flow.
-- `failed_role_count` becomes `incomplete_role_count` everywhere.
-- Report JSON uses `incomplete_role_count`.
-- All complete/partial/failed and mixed-cause cases have tests.
+Forbidden: persistence, worker, API, or provider behavior.
 
-Forbidden: database code, worker concurrency, API, provider changes.
-
-Verify: focused domain/review tests plus the full gate.
-
-### P1 — SQLite schema and migration runner
-
-Goal: create the durable state model and database invariants without repository
-business methods.
+### P1 — Store, migrator, and retry boundary
 
 Planned package:
 
 ```text
 internal/storage/sqlite/
-  migrations/*.sql
-  migrate.go
+  migrations/
   store.go
-  schema_test.go
-  transition_test.go
+  migrate.go
+  immediate.go
+  errors.go
+  *_test.go
 ```
 
-Schema must represent:
+Required behavior:
+
+- open/close file database with WAL, foreign keys, busy timeout, and documented
+  UTC timestamp handling;
+- expose a separate read-only pool that cannot execute writes;
+- apply ordered embedded migrations atomically;
+- store version, filename, SHA-256 checksum, and applied timestamp;
+- opening again is idempotent; checksum mismatch and failed migration fail closed;
+- immediate transaction helper pins one connection, uses `BEGIN IMMEDIATE`,
+  commits/rolls back safely, retries only busy/locked errors up to configured
+  `DB_RETRIES`, and returns typed exhaustion;
+- validation/conflict/stale errors are never retried.
+
+No product tables are required yet; migrator tests use controlled migration
+fixtures. Supervisor exit is a later worker responsibility; this layer must expose
+retry exhaustion distinctly.
+
+### P2 — Core schema
+
+Add the first production migration. Tables represent:
 
 - immutable snapshots and ordered evidence units;
-- review sessions with project/idempotency/hash/state/timing/reason/count fields;
-- exactly the four canonical role identities per created session;
-- role state, interruption cause, error category, and call metadata;
-- findings and ordered basis references;
-- migration version history.
+- sessions with project/idempotency/request hash/snapshot/state/cancel/timing/
+  terminal reason/count fields;
+- role runs with canonical role, status, cause, error, and call metadata;
+- findings and ordered basis references.
 
-Database constraints/triggers must reject:
+Enforce with CHECK/FK/UNIQUE constraints:
 
-- unknown session, role, reason, cause, error, severity, purpose, or unit-kind
-  values;
-- illegal role and session state transitions;
-- mutation/deletion of frozen snapshots or units;
-- findings for a role that is not `in_flight`;
-- evidence references absent from the session's snapshot;
-- mutation of terminal roles;
-- terminal-field combinations that contradict the status.
+- all canonical enum values only;
+- `UNIQUE(project_id, idempotency_key)`;
+- `UNIQUE(session_id, role)`;
+- per-role finding-ID uniqueness;
+- per-finding basis-reference uniqueness and stable ordinal uniqueness;
+- unique snapshot unit IDs and ordinals;
+- valid null/non-null field combinations for each stored state.
 
-Opening an existing database must be idempotent. Failed migrations roll back.
-The store exposes a true read-only connection/pool for report queries. The
-immediate-transaction helper implements the bounded busy/locked retry contract
-and returns a typed terminal error after exhaustion; worker fail-stop behavior is
-a later phase.
+Do not try to enforce “exactly four children” with exotic triggers. P4 atomically
+inserts the four canonical roles; the schema enforces identity/uniqueness, and the
+composer later requires exact completeness.
 
-Verify: fresh/open-again migration tests, pragma tests, constraint rejection,
-transition matrix, and full gate.
+### P3 — Transition, citation, and immutability guards
 
-### P2 — Atomic submission and idempotency
+Add a new migration and direct database rejection tests for:
 
-Goal: implement canonical request hashing and atomic creation.
+```text
+role: pending → in_flight | interrupted
+      in_flight → complete | failed | interrupted
+session: queued → reviewing
+         reviewing → complete | partial | failed
+```
 
-Required behavior:
+Terminal states have no outgoing transitions. Also enforce:
 
-- Hash normalization version 1 plus exact `project_id`, `title`, and `content`.
-- Strict UTF-8, no trimming, no Unicode normalization, preserved line endings,
-  deterministic unambiguous field boundaries, SHA-256.
-- One `BEGIN IMMEDIATE` operation creates snapshot, units, queued session, and
-  four pending roles.
-- Same project/key/hash returns the existing review.
-- Same project/key/different hash returns typed idempotency conflict.
-- Different projects may reuse a key.
-- Concurrent same-key creators have one winner; losers reread and compare.
-- Any insert failure leaves none of the creation rows behind.
+- snapshots and units cannot be updated or deleted;
+- findings may be inserted only while their role is in-flight;
+- every basis ref exists in that session's snapshot;
+- findings and basis refs cannot be updated or deleted after insertion;
+- terminal role status, cause/error, and call metadata are immutable;
+- illegal cause/error/status combinations fail closed.
 
-Verify with a real file-backed database and concurrent goroutines.
+### P4 — Atomic submission and idempotency
 
-### P3 — Deterministic read models
+Persistence input is explicit:
 
-Goal: reconstruct committed snapshots and review state without mutation.
+```text
+project_id
+idempotency_key
+title
+content
+already-frozen evidence.Snapshot
+```
 
-Required behavior:
-
-- Snapshot round-trip preserves unit order and recomputes the stored hash.
-- Session and four role rows load deterministically in canonical role order.
-- Findings load with ordered, unique basis references.
-- Not-found is typed and does not expose another project through a future API
-  seam.
-- Read methods use the store's read-only connection and do not compose, repair,
-  or write.
-
-Verify repeat reads produce deeply equal values and leave database write counters
-unchanged.
-
-### P4 — Claim, cancel, and guarded dispatch
-
-Goal: encode the authority transactions that close scheduling races.
+The store recomputes `evidence.Freeze(snapshot.ID, snapshot.Units)` and rejects a
+missing/mismatched snapshot hash. It does not split content.
 
 Required behavior:
 
-- FIFO claim orders by `created_at, id`, refuses to claim while any session is
-  already reviewing, and conditionally changes one session `queued -> reviewing`
-  while setting timing metadata in the same transaction.
-- Cancellation only flips false to true for queued/reviewing sessions; terminal
-  sessions and repeated cancellation are no-ops with explicit effectiveness.
-- Guarded dispatch uses database time and conditionally changes one canonical
-  pending role to in-flight only while the session is reviewing, cancellation is
-  false, cutoff is future, and database in-flight count is below two.
-- No third role can be claimed under concurrent dispatch attempts.
-- A committed cancel beats a later dispatch; a committed dispatch is allowed to
-  drain.
+- request hash v1 covers version 1 + exact project_id/title/content;
+- strict UTF-8, no trim, no Unicode normalization, submitted line endings
+  preserved, deterministic length-delimited encoding, SHA-256;
+- one immediate transaction creates snapshot, units, queued session, and the
+  four pending roles in canonical order;
+- same project/key/hash returns existing; different hash returns typed conflict;
+- different projects may reuse a key;
+- concurrent same-key loser rereads and compares;
+- any failure rolls back every created row;
+- no queue/admission cap is added.
 
-Do not start goroutines or call a provider in this slice.
+### P5 — Deterministic read models
 
-### P5 — Atomic role publication
+Required behavior:
 
-Goal: persist trusted role outcomes exactly once.
+- reconstruct snapshot and verify stored hash; preserve unit ordinal order;
+- load session and exactly four roles in canonical order;
+- load findings and ordered unique refs deterministically;
+- return typed not-found scoped by project/session identifiers for future 404
+  mapping;
+- status reads work for every session state;
+- reads use the read-only pool and never compose, repair, or write;
+- repeated reads return deeply equal values.
+
+### P6 — FIFO claim and timing policy
+
+Define a validated timing policy:
+
+```text
+DISPATCH_CUTOFF > 0
+CALL_TIMEOUT > 0
+SESSION_HARD_DEADLINE >= DISPATCH_CUTOFF + CALL_TIMEOUT
+```
+
+Claim uses database time and one immediate transaction:
+
+- refuse to claim while any session is reviewing;
+- select oldest queued session by `created_at, id` even when it already has
+  `cancel_requested = true`;
+- change exactly one `queued → reviewing`;
+- set started, dispatch-cutoff, and hard-deadline timestamps atomically;
+- zero-row race returns typed no-work/retry outcome.
+
+No process lock, goroutine, or provider call in this slice.
+
+### P7 — Cancellation request
+
+Implement only the request mutation:
+
+- queued/reviewing false → true returns effective true;
+- already true returns effective false;
+- terminal session returns effective false without mutation;
+- unknown/project-mismatched session returns typed not-found;
+- concurrent cancels have one effective winner;
+- no role state changes and no composer execution here.
+
+### P8 — Deterministic guarded dispatch
+
+One authoritative immediate transaction must:
+
+1. select the lowest canonical pending role (Requirements, Architecture, QA,
+   Security);
+2. recheck session reviewing, cancel false, database time before cutoff, and
+   database in-flight count below two;
+3. change only that selected role `pending → in_flight`;
+4. return a typed no-dispatch reason when a guard fails.
+
+Prove with barrier-based races:
+
+- never more than two in-flight roles;
+- no later role dispatches while an earlier canonical role remains pending;
+- committed cancellation beats later dispatch;
+- committed dispatch remains legitimately in-flight when cancellation follows.
+
+### P9 — Atomic role publication
 
 Success transaction:
 
-- require role `in_flight`;
-- insert all validated findings and ordered basis references;
+- require and compare-and-set from in-flight;
+- insert all validated findings and ordered refs;
 - store call metadata;
-- compare-and-set role to `complete`;
-- commit all or nothing.
+- set complete;
+- all or nothing.
 
 Failure transaction:
 
-- require role `in_flight`;
+- require and compare-and-set from in-flight;
 - store typed error and call metadata;
-- compare-and-set role to `failed`;
+- set failed;
 - no findings.
 
-Late or duplicate terminal writes must fail closed without changing committed
-rows. Injected failures must prove rollback. This slice does not implement retry
-loops or supervisor behavior.
+Late/duplicate terminal writes fail closed. Finding/ref failure rolls back role
+completion. This uses P1's bounded immediate-transaction retry boundary; it does
+not implement worker exit.
 
-### P6 — Interruption and restart recovery
+### P10 — Control sweeps and restart recovery
 
-Goal: terminalize control-path work without replaying providers.
+Transactional, idempotent operations:
 
-Required operations:
-
-- Cancel sweep: pending -> interrupted/user_cancelled; in-flight unchanged.
-- Cutoff sweep: pending -> interrupted/deadline_cutoff; in-flight unchanged.
-- Hard-deadline sweep: remaining pending -> interrupted/deadline_cutoff. The
-  provider goroutine later publishes in-flight timeout via P5 compare-and-set.
-- Restart sweep over stale reviewing sessions:
+- cancel sweep: pending → interrupted/user_cancelled; in-flight unchanged;
+- cutoff sweep: pending → interrupted/deadline_cutoff; in-flight unchanged;
+- hard-deadline sweep: pending → interrupted/deadline_cutoff; worker later
+  cancels provider contexts and publishes in-flight timeout through P9;
+- restart sweep over stale reviewing sessions:
   - complete/failed/interrupted unchanged;
-  - in-flight -> interrupted/process_restart;
-  - pending -> interrupted/user_cancelled when cancel was recorded, otherwise
+  - in-flight → interrupted/process_restart;
+  - pending → interrupted/user_cancelled if cancellation was recorded, otherwise
     interrupted/process_restart;
   - queued sessions untouched;
-  - no provider action or replay.
+  - never replay provider work.
 
-Every sweep is idempotent and transactional.
+### P11 — Transactional composer and reports
 
-### P7 — Transactional composer and report reads
+Composer in one immediate transaction:
 
-Goal: finalize once from committed rows and expose deterministic read data.
+- reread exactly four roles;
+- require all terminal and zero in-flight;
+- derive canonical counts/status/reason;
+- conditional reviewing → terminal update with one winner;
+- concurrent second call returns typed already-finalized without divergence.
 
-Required behavior:
+Report and status reads use the read-only pool. Report method:
 
-- One `BEGIN IMMEDIATE` operation rereads all four roles, verifies all terminal
-  and zero in-flight, derives counts/status/reason, and conditionally changes the
-  session from reviewing to terminal.
-- Precedence: all roles complete, user_cancelled, process_restart,
-  deadline_cutoff, role_failures.
-- Cancellation with zero completed roles is partial/user_cancelled.
-- Store completed and incomplete counts.
-- Concurrent composer calls produce one winner and one typed already-finalized
-  result; they never diverge.
-- Report reads are read-only and deterministically order roles and findings.
+- rejects every nonterminal session with typed `not_finished` for future HTTP 409;
+- includes session status, terminal reason, cancel flag, completed/incomplete
+  counts, per-role status/cause/error/call metadata, and findings;
+- orders roles/findings deterministically;
+- never composes, repairs, calls providers, or writes.
 
-### P8 — Persistence integration and race gate
+### P12 — Integration and race gate
 
-Goal: prove the persistence phase as one system, not only isolated methods.
+Prove the phase as one system:
 
-Required scenarios:
-
-1. submit -> claim -> dispatch two -> publish -> dispatch remaining -> publish ->
+1. submit → claim → dispatch 2 → publish → dispatch remaining → publish →
    compose complete;
-2. same-key concurrent submission winner/loser behavior;
-3. cancel beats pending dispatch;
-4. dispatch beats cancel and in-flight publication drains;
-5. cutoff interrupts pending roles;
-6. restart keeps complete findings and interrupts unfinished roles without replay;
-7. late provider publication cannot overwrite restart interruption;
-8. finding insert failure rolls back role completion;
-9. persistence lock/busy failure is typed and bounded;
-10. repeated reads and composer calls do not mutate terminal data.
+2. concurrent same-key same-hash winner/loser;
+3. same key/different hash conflict;
+4. queued cancellation → claim → cancel sweep → zero calls represented as
+   partial/user_cancelled;
+5. cancel beats pending dispatch;
+6. dispatch beats cancel and in-flight publication drains;
+7. cutoff interrupts pending while in-flight can publish;
+8. hard deadline interrupts pending; in-flight timeout publishes failed; late
+   success cannot overwrite terminal state;
+9. restart preserves complete findings, interrupts unfinished, and replays none;
+10. finding/ref insertion failure rolls back completion;
+11. busy/locked writes retry only to configured bound and surface typed exhaustion;
+12. report before terminal returns typed not_finished;
+13. repeated report/composer calls do not mutate terminal data;
+14. modified applied migration checksum fails open.
 
-Use synchronization barriers, not sleeps, for race tests. Run each concurrency
-scenario repeatedly and run the full suite with Go's race detector:
+Use barriers, not sleeps. Run repeatedly and with the race detector:
 
 ```bash
 go test -race ./...
@@ -365,16 +407,14 @@ go test -race ./...
 
 ## Persistence phase definition of done
 
-The phase is done only when:
+- P0–P12 each have an independently verified commit.
+- Every acceptance case is executable test evidence.
+- Normal tests, race tests, vet, formatting, and diff checks pass.
+- Final tree is clean and contains no later-phase code.
+- `docs/ENGINE-CONTRACT.md` reflects only verified implementation facts.
+- README remains product-focused.
+- Hermes independently verifies the final repository.
 
-- P0 through P8 each have a verified commit;
-- all acceptance cases are executable tests;
-- `go test -race ./...`, normal tests, vet, formatting, and diff checks pass;
-- the final tree is clean;
-- no forbidden later-phase code was introduced;
-- `docs/ENGINE-CONTRACT.md` is updated only to state what is now implemented,
-  without copying the canonical flow or adding progress narrative to README;
-- Hermes independently verifies the final repository state.
-
-Passing the persistence phase does not mean the product is finished. It unlocks
-the next phase: the serialized worker and bounded two-role dispatcher.
+Completing persistence unlocks the next phase: exclusive worker ownership,
+serialized dispatch, two-role concurrency, provider attempt deadlines, and
+fail-stop process behavior.
