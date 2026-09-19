@@ -111,7 +111,8 @@ worker starts
 -> acquire exclusive worker-process lock
      unavailable -> second worker exits
 -> before claiming new work, run RESTART recovery
--> select oldest queued session (FIFO)
+-> select oldest queued session deterministically:
+     ORDER BY created_at, id
 -> atomically claim one session:
      queued -> reviewing
      set started_at
@@ -151,7 +152,7 @@ state:
        role is pending
        session is reviewing
        cancel_requested = false
-       now < dispatch_cutoff_at
+       database current time < dispatch_cutoff_at
        database count(in_flight) < MAX_IN_FLIGHT
      COMMIT
 
@@ -264,10 +265,13 @@ Success:
 
 ```text
 BEGIN IMMEDIATE
--> verify role = in_flight
+-> read role and require status = in_flight
 -> insert all validated findings
 -> store provider-call metadata
--> in_flight -> complete
+-> UPDATE role: in_flight -> complete
+     WHERE status = in_flight
+-> affected rows must equal 1
+     otherwise ROLLBACK and discard the late/stale result
 -> COMMIT
 ```
 
@@ -277,9 +281,12 @@ Execution failure:
 
 ```text
 BEGIN IMMEDIATE
--> verify role = in_flight
--> store typed error_category and provider-call metadata
--> in_flight -> failed
+-> UPDATE role:
+     store typed error_category and provider-call metadata
+     in_flight -> failed
+   WHERE status = in_flight
+-> affected rows must equal 1
+     otherwise ROLLBACK and discard the late/stale result
 -> COMMIT
 ```
 
@@ -458,14 +465,23 @@ The dispatch cutoff controls starts. It does not kill in-flight work.
 
 ## Control path: session hard deadline
 
-Every provider attempt is constrained by the local context deadline. At
-`hard_deadline_at`:
+Every provider attempt is constrained by the local context deadline. The owner
+loop also schedules a wake-up at the exact hard deadline; it does not rely only
+on the periodic tick.
+
+At `hard_deadline_at`:
 
 ```text
-locally cancel and close every in-flight provider request
+BEGIN IMMEDIATE
+-> remaining pending roles -> interrupted / deadline_cutoff
+-> COMMIT
+-> cancel and close local in-flight provider requests
 -> no new dispatch, retry, or repair may start
--> affected in_flight role -> failed / timeout
--> persist, then gate
+-> each affected in-flight role goroutine persists:
+     failed / timeout
+-> every terminal write uses compare-and-set from in_flight
+     a late provider result cannot overwrite a terminal role
+-> gate
 ```
 
 The guarantee applies to SpecCouncil's local request. A remote provider may
