@@ -146,7 +146,7 @@ P5 Read models       P6 FIFO claim + timing policy
 | P11 | Transactional composition and terminal-only report reads | P10 | BLOCKED |
 | P12 | End-to-end persistence and concurrency proof | P11 | BLOCKED |
 
-Only P0 has an executable packet now. Later packets are written after predecessor
+P1A has the only executable packet now. Later packets are written after predecessor
 verification so they cite real APIs and paths rather than guesses.
 
 ## Slice contracts
@@ -168,7 +168,8 @@ Forbidden: persistence, worker, API, or provider behavior.
 
 Create the pure-Go SQLite package and connection lifecycle only:
 
-- validate a real file path plus positive busy timeout;
+- validate a real file path plus a whole-millisecond busy timeout within SQLite's
+  signed 32-bit millisecond range;
 - open one writer pool with exactly one connection;
 - enforce and verify foreign keys, WAL, and busy timeout;
 - open a distinct `mode=ro` pool after writer initialization;

@@ -42,8 +42,12 @@ Define a small validated configuration containing:
 
 ```text
 database file path
-busy timeout > 0
+busy timeout as an exact whole number of milliseconds
 ```
+
+Require `1ms <= busy timeout <= 2147483647ms` so conversion to SQLite's signed
+32-bit millisecond timeout is nonzero and cannot overflow. Reject fractional
+milliseconds instead of truncating them.
 
 Requirements:
 
@@ -65,6 +69,8 @@ PRAGMA busy_timeout = configured milliseconds
 5. After writer initialization, open a distinct pool using SQLite `mode=ro` for
    the same canonical absolute file path. A SQL write through it must fail.
 6. Reader connections must enforce foreign keys and the same bounded busy timeout.
+   Put connection-local pragmas in the encoded driver DSN/connector so every
+   replacement pooled connection inherits them; one setup query is not enough.
    WAL is verified from the writer and visible to the reader; never attempt to set
    journal mode through the read-only pool. Verify pragmas on two simultaneously
    held reader connections so pooled-connection setup is proven.
@@ -75,8 +81,12 @@ PRAGMA busy_timeout = configured milliseconds
 9. If configure, ping, or reader-open fails, close every resource already opened.
    A narrow unexported opener hook is allowed for deterministic cleanup tests; do
    not add a production test mode or exported reset hook.
-10. `Close` is idempotent, closes reader and writer once, returns the real close
-    error, and leaves future operations unusable.
+10. `Close` is idempotent and concurrency-safe. On its first call it attempts to
+    close both reader and writer even if one close fails, combines all real close
+    errors with `errors.Join`, and leaves future operations unusable. Later calls
+    return the same stored result without closing again. A narrow unexported
+    closer abstraction is allowed only so tests can deterministically inject each
+    close failure; do not expose it or add production test mode.
 11. Wrap errors with operation context but never include DSNs, credentials, or
     raw file content.
 
@@ -88,6 +98,7 @@ spaces, and `#`. Do not construct a SQLite URI by raw string concatenation.
 Use separate real files under `t.TempDir()`. Cover:
 
 - invalid empty, relative, directory, missing-parent, memory, and malformed paths;
+- invalid busy timeouts: zero, negative, fractional millisecond, and overflow;
 - absolute Windows-relevant filenames containing spaces and `#`;
 - fresh open creates/opens the file successfully;
 - writer has one connection and live foreign-key/WAL/busy-timeout values;
@@ -95,7 +106,9 @@ Use separate real files under `t.TempDir()`. Cover:
 - reader sees committed writer data;
 - write through reader fails and leaves writer data unchanged;
 - failure after writer open does not leave a usable/leaked partial store;
-- close behavior matches its documented contract;
+- first `Close` attempts both pools, deterministically joins injected close errors,
+  and concurrent/repeated closes return the same result without closing twice;
+- after close, both real pools are unusable;
 - two independent test databases never share state.
 
 Do not use sleeps. Tests must not depend on a globally installed SQLite CLI.
