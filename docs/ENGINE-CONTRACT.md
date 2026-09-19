@@ -100,11 +100,22 @@ severity rank, role rank, primary basis_ref, category, finding id
 
 A failed or interrupted role contributes zero findings.
 
+### SQLite connection foundation
+
+Package `internal/storage/sqlite` provides the verified pure-Go SQLite connection foundation:
+
+- Validated configuration requiring an absolute filesystem path with an existing parent directory (rejecting empty, relative, directory, and memory-mode paths) and an exact whole-millisecond busy timeout within `[1ms, 2147483647ms]`.
+- Single-connection writer pool with live verification of `foreign_keys = ON`, `journal_mode = WAL`, and configured `busy_timeout`.
+- Distinct read-only reader pool (`mode=ro`) with connection-local foreign-key and busy-timeout pragmas inherited by pooled connections.
+- Cross-pool visibility verified and SQL writes through the read-only pool rejected.
+- Concurrency-safe and idempotent store cleanup closing both pools and joining errors.
+
 ## Not built yet
 
-API endpoints, authentication and authorization, SQLite persistence and its
-guards, the bounded two-at-a-time scheduler, `dispatch_cutoff_at` / `call_timeout`
-/ `hard_deadline_at` enforcement, cancellation at the dispatch boundary under
+API endpoints, authentication and authorization, SQLite schema migrations,
+immediate transactions, retry loops, product tables and triggers, the bounded
+two-at-a-time scheduler, `dispatch_cutoff_at` / `call_timeout` /
+`hard_deadline_at` enforcement, cancellation at the dispatch boundary under
 concurrency, startup recovery sweep, idempotency and request hashing, the real
 provider adapter, and the supervised worker restart policy.
 
