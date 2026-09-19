@@ -154,12 +154,24 @@ Package `internal/storage/sqlite` provides verified database triggers via migrat
 - `Record immutability`: `snapshots`, `evidence_units`, `findings`, and `finding_basis_refs` reject all `UPDATE` and `DELETE` operations after initial insertion. Core identity, project, idempotency, hash, and creation timestamp fields of `sessions` and `role_runs` are immutable after insert.
 - `Citation integrity`: `finding_basis_refs` requires referenced evidence units to belong to the exact same snapshot as the finding's session on both insert and update. Cross-snapshot citations are aborted. References to non-existent findings or evidence units are rejected by existing foreign key constraints.
 
+### SQLite atomic submission and idempotency
+
+Package `internal/storage/sqlite` provides verified atomic submission and idempotency handling via `submit.go`:
+
+- `Request hash v1`: deterministic SHA-256 over unambiguous length-prefixed bytes:
+  `normalization_version=1\n<byte_len(project_id)>:<project_id>\n<byte_len(title)>:<title>\n<byte_len(content)>:<content>`.
+  Strict UTF-8 validation rejecting invalid sequences before hashing; no trimming; no Unicode normalization; exact submitted line endings preserved.
+- `Atomic submission`: executed entirely within one `withImmediate` transaction. Checks `(project_id, idempotency_key)`. Absent key atomically creates the immutable snapshot, ordered evidence units, queued session (`cancel_requested = 0`, `completed_role_count = 0`, `incomplete_role_count = 4`, null timing/claim/terminal fields), and exactly the four canonical role runs in `domain.Roles` order (`requirements`, `architecture`, `qa`, `security`) in `pending` status.
+- `Idempotency replay`: matching `(project_id, idempotency_key)` with identical request hash returns the original session identity (`Replay: true`) without creating new rows.
+- `Idempotency conflict`: matching `(project_id, idempotency_key)` with mismatched request hash returns a typed `IdempotencyConflictError` matching sentinel `ErrIdempotencyConflict`.
+- `Concurrency safety`: insert races on `(project_id, idempotency_key)` are resolved authoritatively by rereading the winning committed row and verifying request hash equivalence.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, the bounded
 two-at-a-time scheduler, `dispatch_cutoff_at` / `call_timeout` /
 `hard_deadline_at` enforcement, cancellation at the dispatch boundary under
-concurrency, startup recovery sweep, idempotency and request hashing, the real
+concurrency, startup recovery sweep, the real
 provider adapter, and the supervised worker restart policy.
 
 ## Known implementation gaps against the canonical flow
