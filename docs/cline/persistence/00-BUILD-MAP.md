@@ -137,7 +137,7 @@ P5 Read models       P6 FIFO claim + timing policy
 | P1A | SQLite open/close, writer pragmas, and read-only pool | P0 | COMPLETE (`c21c240`) |
 | P1B | Ordered checksummed migration runner | P1A | COMPLETE (`0975ad0`) |
 | P1C | Reusable `BEGIN IMMEDIATE` and bounded busy retry | P1B | COMPLETE (`71da0fe`) |
-| P2 | Core tables, enum/check/FK/unique constraints | P1C | BLOCKED |
+| P2 | Core tables, enum/check/FK/unique constraints | P1C | READY |
 | P3 | State-transition, citation, and immutability triggers | P2 | BLOCKED |
 | P4 | Request hash v1 and atomic create/idempotency | P3 | BLOCKED |
 | P5 | Deterministic read models | P4 | BLOCKED |
