@@ -36,6 +36,8 @@ Create or modify only:
 ```text
 internal/storage/sqlite/migrations/002_core_schema.sql
 internal/storage/sqlite/schema_test.go
+internal/storage/sqlite/migrate_test.go  (only stale P1B production-embedding
+                              expectations affected by adding migration 002)
 docs/ENGINE-CONTRACT.md   (one factual P2 update after verification)
 ```
 
@@ -136,7 +138,12 @@ Do not add:
 - transition or immutability triggers (P3);
 - repository/store methods, submission, request hashing, idempotency, claims,
   cancellation mutation, dispatch, composer, workers, API, auth, providers, UI;
-- changes to P1A/P1B/P1C, canonical flow, README, or build packets;
+- changes to P1A/P1B/P1C implementation code, P1A/P1C tests, canonical flow,
+  README, or build packets;
+- changes to P1B tests are allowed only to replace stale assertions about the
+  production embedded migration count and the pre-P2 no-product-schema state.
+  Do not weaken P1B checksum, rollback, manifest, idempotency, or cancellation
+  tests; P2 must leave those semantics intact.
 - an exactly-four-role trigger or any hidden application workflow.
 
 ## Verify
