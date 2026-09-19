@@ -144,10 +144,19 @@ Package `internal/storage/sqlite` provides the verified core production schema v
 - `findings`: reviewer findings with foreign key to role run (`ON DELETE CASCADE`), stable finding ID, canonical severity (`critical`, `high`, `medium`, `low`), category, length-bounded issue (<= 1000 chars) and recommendation (<= 1000 chars), created timestamp, and unique `(role_run_id, finding_id)`.
 - `finding_basis_refs`: citation links from findings to evidence units with foreign key to finding (`ON DELETE CASCADE`), foreign key to evidence unit (`ON DELETE RESTRICT`), positive ordinal (1..5), and unique `(finding_id, evidence_unit_id)` and `(finding_id, ordinal)`.
 
+### SQLite state, citation, and immutability guards
+
+Package `internal/storage/sqlite` provides verified database triggers via migration `003_state_guards.sql`:
+
+- `Role transitions`: guarded to allow only `pending -> in_flight | interrupted` and `in_flight -> complete | failed | interrupted`. Terminal role states (`complete`, `failed`, `interrupted`) cannot be rewritten or transitioned. Transition field combinations (started_at, completed_at, cause, error_category, call_count) are strictly verified.
+- `Session transitions`: guarded to allow only `queued -> reviewing` and `reviewing -> complete | partial | failed`. Terminal sessions (`complete`, `partial`, `failed`) cannot be rewritten or transitioned. Terminal composition validation rejects invalid counts or terminal reasons upon transitioning to terminal states.
+- `Cancellation monotonicity`: `cancel_requested` may only transition from `0` to `1` and can never be reset to `0`. Triggers do not autonomously compose verdicts or dispatch roles.
+- `Record immutability`: `snapshots`, `evidence_units`, `findings`, and `finding_basis_refs` reject all `UPDATE` and `DELETE` operations after initial insertion. Core identity, project, idempotency, hash, and creation timestamp fields of `sessions` and `role_runs` are immutable after insert.
+- `Citation integrity`: `finding_basis_refs` requires referenced evidence units to belong to the exact same snapshot as the finding's session on both insert and update. Cross-snapshot citations are aborted. References to non-existent findings or evidence units are rejected by existing foreign key constraints.
+
 ## Not built yet
 
-API endpoints, authentication and authorization,
-state-transition and immutability triggers, the bounded
+API endpoints, authentication and authorization, the bounded
 two-at-a-time scheduler, `dispatch_cutoff_at` / `call_timeout` /
 `hard_deadline_at` enforcement, cancellation at the dispatch boundary under
 concurrency, startup recovery sweep, idempotency and request hashing, the real

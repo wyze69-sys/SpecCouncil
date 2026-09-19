@@ -88,6 +88,7 @@ func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
 	foundEmbedGo := false
 	found001SQL := false
 	found002SQL := false
+	found003SQL := false
 	for _, e := range entries {
 		if e.Name() == "embed.go" {
 			foundEmbedGo = true
@@ -97,6 +98,9 @@ func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
 		}
 		if e.Name() == "002_core_schema.sql" {
 			found002SQL = true
+		}
+		if e.Name() == "003_state_guards.sql" {
+			found003SQL = true
 		}
 	}
 
@@ -108,6 +112,9 @@ func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
 	}
 	if !found002SQL {
 		t.Fatalf("expected 002_core_schema.sql to be embedded in migrations.FS")
+	}
+	if !found003SQL {
+		t.Fatalf("expected 003_state_guards.sql to be embedded in migrations.FS")
 	}
 
 	// Verify discoverManifest walks the tree, ignores embed.go, and discovers production migrations
@@ -122,6 +129,7 @@ func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
 	}{
 		{version: 1, name: "migration_metadata"},
 		{version: 2, name: "core_schema"},
+		{version: 3, name: "state_guards"},
 	}
 
 	if len(manifest) != len(expectedMigrations) {
@@ -426,6 +434,7 @@ func TestMigrate_FreshDatabaseAppliesPending(t *testing.T) {
 	}{
 		{version: 1, name: "migration_metadata"},
 		{version: 2, name: "core_schema"},
+		{version: 3, name: "state_guards"},
 	}
 
 	if len(applied) != len(expectedApplied) {
@@ -497,8 +506,8 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	initialApplied := queryAppliedMigrations(t, writer)
-	if len(initialApplied) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(initialApplied))
+	if len(initialApplied) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(initialApplied))
 	}
 	originalTimestamps := make(map[int]string)
 	for _, m := range initialApplied {
@@ -516,8 +525,8 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	afterSecond := queryAppliedMigrations(t, writer)
-	if len(afterSecond) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(afterSecond))
+	if len(afterSecond) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(afterSecond))
 	}
 	for _, m := range afterSecond {
 		if m.AppliedAt != originalTimestamps[m.Version] {
@@ -544,8 +553,8 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	afterReopen := queryAppliedMigrations(t, reopenedWriter)
-	if len(afterReopen) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(afterReopen))
+	if len(afterReopen) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(afterReopen))
 	}
 	for _, m := range afterReopen {
 		if m.AppliedAt != originalTimestamps[m.Version] {
@@ -1251,14 +1260,14 @@ func TestMigrate_CoreProductSchemaCreatedByP2(t *testing.T) {
 		}
 	}
 
-	// Verify no triggers exist in P2 schema (triggers belong in P3)
+	// Verify state and citation guard triggers exist after P3 migration
 	var triggerCount int
 	err = writer.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger';").Scan(&triggerCount)
 	if err != nil {
 		t.Fatalf("query triggers: %v", err)
 	}
-	if triggerCount != 0 {
-		t.Errorf("expected 0 triggers in P2 schema, found %d", triggerCount)
+	if triggerCount == 0 {
+		t.Errorf("expected state and citation guard triggers in P3 schema, found 0")
 	}
 
 	forbiddenTables := []string{

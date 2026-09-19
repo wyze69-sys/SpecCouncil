@@ -4,17 +4,30 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/wyze69-sys/SpecCouncil/internal/storage/sqlite/migrations"
 )
 
 func openMigratedStore(t *testing.T) (*Store, *sql.DB) {
 	t.Helper()
 	store, _ := setupTestStore(t, 100*time.Millisecond)
-	// We run Migrate with production migrations
-	// If store.Migrate fails due to previous test expectations, we report it.
-	_ = store.Migrate(context.Background())
+	// Apply migrations through 002 to test the core P2 schema fixture in isolation
+	p2FS := fstest.MapFS{}
+	for _, name := range []string{"001_migration_metadata.sql", "002_core_schema.sql"} {
+		data, err := fs.ReadFile(migrations.FS, name)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", name, err)
+		}
+		p2FS[name] = &fstest.MapFile{Data: data}
+	}
+	if err := store.migrateFS(context.Background(), p2FS); err != nil {
+		t.Fatalf("migrate P2 schema fixture: %v", err)
+	}
 	writer, err := store.writerDB()
 	if err != nil {
 		t.Fatalf("writerDB: %v", err)
