@@ -166,6 +166,18 @@ Package `internal/storage/sqlite` provides verified atomic submission and idempo
 - `Idempotency conflict`: matching `(project_id, idempotency_key)` with mismatched request hash returns a typed `IdempotencyConflictError` matching sentinel `ErrIdempotencyConflict`.
 - `Concurrency safety`: insert races on `(project_id, idempotency_key)` are resolved authoritatively by rereading the winning committed row and verifying request hash equivalence.
 
+### SQLite deterministic read models
+
+Package `internal/storage/sqlite` provides verified read-only status and terminal report models via `read.go`:
+
+- `Read-only pool execution`: status, report, and snapshot queries execute exclusively through the dedicated `mode=ro` pool via `SELECT` statements; no write transaction, mutation, provider, composer, or worker invocation is allowed.
+- `Scoped typed errors`: missing sessions return a typed `SessionNotFoundError` matching `ErrNotFound` and `ErrSessionNotFound`, preserving `ProjectID` scoping for 404 mapping; report requests on non-terminal sessions (`queued`, `reviewing`) fail closed with `SessionNotTerminalError` matching `ErrNotTerminal` and `ErrNotFinished`.
+- `Deterministic reconstruction`: role ordering is reconstructed strictly from canonical `domain.Roles` (`requirements`, `architecture`, `qa`, `security`) rather than database row order; findings are sorted by deterministic total order (`severity rank`, `role rank`, `primary basis_ref`, `category`, `finding id`); finding basis references are ordered strictly by positive ordinal `1..5`.
+- `Persisted field preservation`: `cancel_requested`, `status`, `terminal_reason`, `completed_role_count`, and `incomplete_role_count` are returned exactly as committed in storage without verdict composition or re-derivation from live flags.
+- `Filtered role findings`: failed and interrupted roles contribute zero findings to terminal reports.
+- `Snapshot hash integrity`: `ReadSnapshot` reconstructs ordered evidence units, recomputes canonical hash via `evidence.Freeze`, and fails closed with `ErrSnapshotCorrupted` on mismatch.
+- `Strict UTC timestamp and enum decoding`: all persisted timestamps require UTC RFC3339Nano representation ending in 'Z' with length >= 20; malformed timestamps, enums, or count combinations return typed errors without silent fallback.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, the bounded
