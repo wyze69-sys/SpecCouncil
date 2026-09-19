@@ -100,5 +100,5 @@ cmd/speccouncil     command-line entry point
 - An empty findings list is a valid success.
 - Report ordering is a total order, so completion order cannot change the output.
 
-See `docs/ENGINE-CONTRACT.md` for the full contract and the list of decisions the
-specification has not frozen yet.
+The approved complete runtime flow is in `docs/CANONICAL-FLOW.md`.
+`docs/ENGINE-CONTRACT.md` records which parts the current milestone implements.
