@@ -139,7 +139,7 @@ P5 Read models       P6 FIFO claim + timing policy
 | P1C | Reusable `BEGIN IMMEDIATE` and bounded busy retry | P1B | COMPLETE (`71da0fe`) |
 | P2 | Core tables, enum/check/FK/unique constraints | P1C | COMPLETE (`9db3dab`) |
 | P3 | State-transition, citation, and immutability triggers | P2 | COMPLETE (`975c123`) |
-| P4 | Request hash v1 and atomic create/idempotency | P3 | READY |
+| P4 | Request hash v1 and atomic create/idempotency | P3 | COMPLETE (`6906d85`) |
 | P5 | Deterministic read models | P4 | BLOCKED |
 | P6 | Validated timing policy and single-session FIFO claim | P4 | BLOCKED |
 | P7 | Idempotent cancellation request mutation | P6 | BLOCKED |
