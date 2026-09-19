@@ -203,13 +203,26 @@ Package `internal/storage/sqlite` provides verified atomic, idempotent cancellat
 - `Scope preservation`: leaves status, role runs, terminal reason, role counts, deadlines, timestamps, and findings completely unchanged; no worker, dispatch, composer, or provider invocation.
 - `Concurrency safety`: concurrent cancellation attempts serialize through SQLite immediate transaction locks, ensuring exactly one winning attempt reports `Effective: true` while all concurrent callers receive consistent committed state.
 
+### SQLite guarded role dispatch reservation
+
+Package `internal/storage/sqlite` provides verified atomic, guarded pending-role reservation via `dispatch.go`:
+
+- `Reviewing-only execution`: operates only on sessions in `reviewing` status; non-reviewing sessions (queued or terminal) return a typed no-work result (`DispatchNoWorkNotReviewing`) without modifying database state.
+- `Cancellation guard`: refuses reservation when `cancel_requested = 1`, returning typed no-work (`DispatchNoWorkCancelled`).
+- `Cutoff boundary enforcement`: refuses reservation when current time `now >= dispatch_cutoff_at`, returning typed no-work (`DispatchNoWorkCutoff`).
+- `Persisted in-flight capacity bound`: counts persisted `in_flight` roles inside the same immediate transaction; never reserves when the count is already `MAX_IN_FLIGHT = 2`, returning typed no-work (`DispatchNoWorkCapacityFull`).
+- `Canonical role ordering`: selects the next pending role deterministically by canonical role order (`requirements`, `architecture`, `qa`, `security`) regardless of physical row order in storage. Returns typed no-work (`DispatchNoWorkNoPendingRole`) when no pending roles remain.
+- `Atomic transition and call metadata`: changes exactly one pending role to `in_flight`, setting `started_at` in UTC RFC3339Nano with 'Z' suffix and initial call metadata (`call_count = 0`).
+- `Authoritative UPDATE predicate rechecking`: rechecks session reviewing status, un-cancelled flag, cutoff boundary, and in-flight capacity `< 2` within the authoritative `UPDATE` statement's `WHERE` clause; fast-path reads are not treated as authority. If concurrent mutation causes 0 rows affected, returns typed no-work (`DispatchNoWorkGuardConflict`).
+- `Cancellation and cutoff race safety`: a concurrent cancellation committing before the guarded update prevents reservation; a reservation committing first remains legitimately in-flight while cancellation follows.
+- `Strict persistence scope`: leaves session status, cancel flag, and other role rows completely untouched; never calls providers, starts goroutines, or holds transactions over external work.
+
 ## Not built yet
 
-API endpoints, authentication and authorization, the bounded
-two-at-a-time scheduler, `dispatch_cutoff_at` / `call_timeout` /
-`hard_deadline_at` enforcement, cancellation at the dispatch boundary under
-concurrency, startup recovery sweep, the real
-provider adapter, and the supervised worker restart policy.
+API endpoints, authentication and authorization, provider call execution,
+compare-and-set role publication (P9), control sweeps and restart recovery (P10),
+transactional composer (P11), the real provider adapter, and supervised worker
+process orchestration.
 
 ## Known implementation gaps against the canonical flow
 
