@@ -87,12 +87,16 @@ func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
 
 	foundEmbedGo := false
 	found001SQL := false
+	found002SQL := false
 	for _, e := range entries {
 		if e.Name() == "embed.go" {
 			foundEmbedGo = true
 		}
 		if e.Name() == "001_migration_metadata.sql" {
 			found001SQL = true
+		}
+		if e.Name() == "002_core_schema.sql" {
+			found002SQL = true
 		}
 	}
 
@@ -102,21 +106,41 @@ func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
 	if !found001SQL {
 		t.Fatalf("expected 001_migration_metadata.sql to be embedded in migrations.FS")
 	}
+	if !found002SQL {
+		t.Fatalf("expected 002_core_schema.sql to be embedded in migrations.FS")
+	}
 
-	// Verify discoverManifest walks the tree, ignores embed.go, and discovers 001_migration_metadata.sql
+	// Verify discoverManifest walks the tree, ignores embed.go, and discovers production migrations
 	manifest, err := discoverManifest(migrations.FS)
 	if err != nil {
 		t.Fatalf("discoverManifest on production FS: %v", err)
 	}
 
-	if len(manifest) != 1 {
-		t.Fatalf("expected 1 migration in production FS, got %d", len(manifest))
+	expectedMigrations := []struct {
+		version int
+		name    string
+	}{
+		{version: 1, name: "migration_metadata"},
+		{version: 2, name: "core_schema"},
 	}
-	if manifest[0].Version != 1 {
-		t.Errorf("manifest[0].Version = %d, want 1", manifest[0].Version)
+
+	if len(manifest) != len(expectedMigrations) {
+		t.Fatalf("expected %d migrations in production FS, got %d", len(expectedMigrations), len(manifest))
 	}
-	if manifest[0].Name != "migration_metadata" {
-		t.Errorf("manifest[0].Name = %q, want 'migration_metadata'", manifest[0].Name)
+
+	for i, exp := range expectedMigrations {
+		if manifest[i].Version != exp.version {
+			t.Errorf("manifest[%d].Version = %d, want %d", i, manifest[i].Version, exp.version)
+		}
+		if manifest[i].Name != exp.name {
+			t.Errorf("manifest[%d].Name = %q, want %q", i, manifest[i].Name, exp.name)
+		}
+		if len(manifest[i].Checksum) != 64 {
+			t.Errorf("manifest[%d].Checksum length = %d, want 64", i, len(manifest[i].Checksum))
+		}
+		if len(manifest[i].SQL) == 0 {
+			t.Errorf("manifest[%d].SQL is empty", i)
+		}
 	}
 }
 
@@ -396,21 +420,31 @@ func TestMigrate_FreshDatabaseAppliesPending(t *testing.T) {
 	}
 
 	applied := queryAppliedMigrations(t, writer)
-	if len(applied) != 1 {
-		t.Fatalf("expected exactly 1 applied migration, got %d", len(applied))
+	expectedApplied := []struct {
+		version int
+		name    string
+	}{
+		{version: 1, name: "migration_metadata"},
+		{version: 2, name: "core_schema"},
 	}
 
-	if applied[0].Version != 1 {
-		t.Errorf("applied version = %d, want 1", applied[0].Version)
+	if len(applied) != len(expectedApplied) {
+		t.Fatalf("expected exactly %d applied migrations, got %d", len(expectedApplied), len(applied))
 	}
-	if applied[0].Name != "migration_metadata" {
-		t.Errorf("applied name = %q, want 'migration_metadata'", applied[0].Name)
-	}
-	if len(applied[0].Checksum) != 64 {
-		t.Errorf("invalid checksum length %d", len(applied[0].Checksum))
-	}
-	if err := validateAppliedAt(applied[0].AppliedAt); err != nil {
-		t.Errorf("invalid applied_at: %v (%s)", err, applied[0].AppliedAt)
+
+	for i, exp := range expectedApplied {
+		if applied[i].Version != exp.version {
+			t.Errorf("applied[%d].Version = %d, want %d", i, applied[i].Version, exp.version)
+		}
+		if applied[i].Name != exp.name {
+			t.Errorf("applied[%d].Name = %q, want %q", i, applied[i].Name, exp.name)
+		}
+		if len(applied[i].Checksum) != 64 {
+			t.Errorf("applied[%d] invalid checksum length %d", i, len(applied[i].Checksum))
+		}
+		if err := validateAppliedAt(applied[i].AppliedAt); err != nil {
+			t.Errorf("applied[%d] invalid applied_at: %v (%s)", i, err, applied[i].AppliedAt)
+		}
 	}
 }
 
@@ -463,10 +497,13 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	initialApplied := queryAppliedMigrations(t, writer)
-	if len(initialApplied) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(initialApplied))
+	if len(initialApplied) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(initialApplied))
 	}
-	originalTimestamp := initialApplied[0].AppliedAt
+	originalTimestamps := make(map[int]string)
+	for _, m := range initialApplied {
+		originalTimestamps[m.Version] = m.AppliedAt
+	}
 
 	origClock := clock
 	clock = func() time.Time {
@@ -479,11 +516,13 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	afterSecond := queryAppliedMigrations(t, writer)
-	if len(afterSecond) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(afterSecond))
+	if len(afterSecond) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(afterSecond))
 	}
-	if afterSecond[0].AppliedAt != originalTimestamp {
-		t.Fatalf("applied_at changed on rerun: got %s, want %s", afterSecond[0].AppliedAt, originalTimestamp)
+	for _, m := range afterSecond {
+		if m.AppliedAt != originalTimestamps[m.Version] {
+			t.Fatalf("version %d applied_at changed on rerun: got %s, want %s", m.Version, m.AppliedAt, originalTimestamps[m.Version])
+		}
 	}
 
 	storePath := store.canonicalPath
@@ -505,11 +544,13 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	afterReopen := queryAppliedMigrations(t, reopenedWriter)
-	if len(afterReopen) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(afterReopen))
+	if len(afterReopen) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(afterReopen))
 	}
-	if afterReopen[0].AppliedAt != originalTimestamp {
-		t.Fatalf("applied_at changed on reopen: got %s, want %s", afterReopen[0].AppliedAt, originalTimestamp)
+	for _, m := range afterReopen {
+		if m.AppliedAt != originalTimestamps[m.Version] {
+			t.Fatalf("version %d applied_at changed on reopen: got %s, want %s", m.Version, m.AppliedAt, originalTimestamps[m.Version])
+		}
 	}
 }
 
@@ -1159,7 +1200,11 @@ func TestMigrate_MetadataRowIntegrityRejection(t *testing.T) {
 	})
 }
 
-func TestMigrate_NoProductSchemaCreatedByP1B(t *testing.T) {
+// TestMigrate_CoreProductSchemaCreatedByP2 verifies that running production migrations
+// creates exactly the schema_migrations metadata table and the six core production tables
+// (snapshots, evidence_units, sessions, role_runs, findings, finding_basis_refs),
+// and no unexpected tables or triggers. Replaces obsolete TestMigrate_NoProductSchemaCreatedByP1B.
+func TestMigrate_CoreProductSchemaCreatedByP2(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
@@ -1172,7 +1217,7 @@ func TestMigrate_NoProductSchemaCreatedByP1B(t *testing.T) {
 		t.Fatalf("writerDB: %v", err)
 	}
 
-	rows, err := writer.Query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';")
+	rows, err := writer.Query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name ASC;")
 	if err != nil {
 		t.Fatalf("query tables: %v", err)
 	}
@@ -1187,22 +1232,47 @@ func TestMigrate_NoProductSchemaCreatedByP1B(t *testing.T) {
 		tables = append(tables, name)
 	}
 
-	if len(tables) != 1 || tables[0] != "schema_migrations" {
-		t.Fatalf("expected ONLY [schema_migrations] table, got: %v", tables)
+	expectedTables := []string{
+		"evidence_units",
+		"finding_basis_refs",
+		"findings",
+		"role_runs",
+		"schema_migrations",
+		"sessions",
+		"snapshots",
+	}
+
+	if len(tables) != len(expectedTables) {
+		t.Fatalf("expected tables %v, got: %v", expectedTables, tables)
+	}
+	for i, expected := range expectedTables {
+		if tables[i] != expected {
+			t.Errorf("tables[%d] = %q, want %q", i, tables[i], expected)
+		}
+	}
+
+	// Verify no triggers exist in P2 schema (triggers belong in P3)
+	var triggerCount int
+	err = writer.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger';").Scan(&triggerCount)
+	if err != nil {
+		t.Fatalf("query triggers: %v", err)
+	}
+	if triggerCount != 0 {
+		t.Errorf("expected 0 triggers in P2 schema, found %d", triggerCount)
 	}
 
 	forbiddenTables := []string{
-		"sessions", "session",
-		"roles", "role", "role_runs",
-		"snapshots", "snapshot",
+		"session",
+		"roles", "role",
+		"snapshot",
 		"snapshot_units", "units",
-		"findings", "finding",
+		"finding",
 		"basis_references", "refs",
 	}
 
 	for _, tbl := range forbiddenTables {
 		if tableExists(t, writer, tbl) {
-			t.Errorf("forbidden product table %q was created by P1B!", tbl)
+			t.Errorf("forbidden/non-canonical table %q was created!", tbl)
 		}
 	}
 }

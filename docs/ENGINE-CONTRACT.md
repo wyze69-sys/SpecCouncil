@@ -133,10 +133,21 @@ Package `internal/storage/sqlite` provides the verified immediate transaction wr
 - Cleanup guarantees: rollback using a bounded independent cleanup context on callback error, panic, context cancellation, and commit failure; re-panic of original panic value; and connection poisoning via `driver.ErrBadConn` if rollback cannot be confirmed.
 - Authoritative commit: a confirmed commit returns success even if cancellation arrives immediately afterward.
 
+### SQLite core schema
+
+Package `internal/storage/sqlite` provides the verified core production schema via migration `002_core_schema.sql`:
+
+- `snapshots`: immutable snapshot identity, lowercase SHA-256 hash, project ID, title, content, normalization version 1, and UTC RFC3339Nano timestamp with 'Z' suffix.
+- `evidence_units`: addressable design segments with foreign key to snapshot (`ON DELETE CASCADE`), stable unit ID, non-negative ordinal, canonical kind (`brief`, `requirement`, `component`, `flow`, `constraint`, `data_rule`), non-empty text, and unique `(snapshot_id, unit_id)` and `(snapshot_id, ordinal)`.
+- `sessions`: review session entity with project ID, idempotency key, request hash, foreign key to snapshot (`ON DELETE RESTRICT`), canonical status (`queued`, `reviewing`, `complete`, `partial`, `failed`), `cancel_requested` boolean (0/1), timing deadlines (`dispatch_cutoff_at`, `hard_deadline_at`), terminal reason, completed/incomplete role counts (`completed_role_count + incomplete_role_count = 4`), timestamps, unique `(project_id, idempotency_key)`, and valid state-dependent null/non-null column checks.
+- `role_runs`: per-role execution tracking with foreign key to session (`ON DELETE CASCADE`), canonical role (`requirements`, `architecture`, `qa`, `security`), canonical status (`pending`, `in_flight`, `complete`, `failed`, `interrupted`), interruption cause, error category, call count (0..2), timestamps, unique `(session_id, role)`, and valid status/cause/error checks.
+- `findings`: reviewer findings with foreign key to role run (`ON DELETE CASCADE`), stable finding ID, canonical severity (`critical`, `high`, `medium`, `low`), category, length-bounded issue (<= 1000 chars) and recommendation (<= 1000 chars), created timestamp, and unique `(role_run_id, finding_id)`.
+- `finding_basis_refs`: citation links from findings to evidence units with foreign key to finding (`ON DELETE CASCADE`), foreign key to evidence unit (`ON DELETE RESTRICT`), positive ordinal (1..5), and unique `(finding_id, evidence_unit_id)` and `(finding_id, ordinal)`.
+
 ## Not built yet
 
 API endpoints, authentication and authorization,
-product tables and triggers, the bounded
+state-transition and immutability triggers, the bounded
 two-at-a-time scheduler, `dispatch_cutoff_at` / `call_timeout` /
 `hard_deadline_at` enforcement, cancellation at the dispatch boundary under
 concurrency, startup recovery sweep, idempotency and request hashing, the real
