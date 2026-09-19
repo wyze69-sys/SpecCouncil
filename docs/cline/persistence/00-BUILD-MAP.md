@@ -147,7 +147,7 @@ P5 Read models       P6 FIFO claim + timing policy
 | P9 | Compare-and-set success/failure publication | P5, P8 | COMPLETE (`61241f4`) |
 | P10 | Cancel/cutoff/deadline sweeps and restart recovery | P9 | COMPLETE (`7945ee6`) |
 | P11 | Transactional composition and terminal-only report reads | P10 | COMPLETE (`3066996`) |
-| P12 | End-to-end persistence and concurrency proof | P11 | READY |
+| P12 | End-to-end persistence and concurrency proof | P11 | COMPLETE (`7e57a05`) |
 
 P1A has the only executable packet now. Later packets are written after predecessor
 verification so they cite real APIs and paths rather than guesses.
