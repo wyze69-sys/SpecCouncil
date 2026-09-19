@@ -144,7 +144,7 @@ P5 Read models       P6 FIFO claim + timing policy
 | P6 | Validated timing policy and single-session FIFO claim | P4 | COMPLETE (`32c6ec1`) |
 | P7 | Idempotent cancellation request mutation | P6 | COMPLETE (`c43fdc0`) |
 | P8 | Deterministic guarded dispatch and cancel race | P7 | COMPLETE (`b2218d7`) |
-| P9 | Compare-and-set success/failure publication | P5, P8 | READY |
+| P9 | Compare-and-set success/failure publication | P5, P8 | COMPLETE (`61241f4`) |
 | P10 | Cancel/cutoff/deadline sweeps and restart recovery | P9 | BLOCKED |
 | P11 | Transactional composition and terminal-only report reads | P10 | BLOCKED |
 | P12 | End-to-end persistence and concurrency proof | P11 | BLOCKED |
