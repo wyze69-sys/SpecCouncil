@@ -121,10 +121,22 @@ Package `internal/storage/sqlite` provides the embedded, ordered, checksummed SQ
 - Idempotent reopen without modifying applied timestamps or re-running applied migrations.
 - Context cancellation respected before and during migration execution.
 
+### SQLite immediate transaction retry boundary
+
+Package `internal/storage/sqlite` provides the verified immediate transaction write boundary and bounded busy retry:
+
+- Dedicated `*sql.Conn` per attempt with literal `BEGIN IMMEDIATE` execution (acquiring the RESERVED lock immediately, never assuming a normal `sql.Tx` is immediate).
+- Structured `SQLITE_BUSY` and `SQLITE_LOCKED` contention classification (including extended result codes such as `SQLITE_BUSY_SNAPSHOT`) using the 8-bit primary result code mask and `errors.As` without substring matching.
+- Bounded retry loop executing at most `1 + DB_RETRIES` attempts with enforceable upper-bounded backoff honoring context cancellation.
+- Typed `PersistenceUnavailable` error for retry exhaustion preserving operation name, total attempts, and the underlying driver error for `errors.Is`/`errors.As` without exposing DSNs, credentials, or raw SQL.
+- Strict database-only callback boundary; domain, validation, conflict, or non-busy driver errors fail immediately without retry.
+- Cleanup guarantees: rollback using a bounded independent cleanup context on callback error, panic, context cancellation, and commit failure; re-panic of original panic value; and connection poisoning via `driver.ErrBadConn` if rollback cannot be confirmed.
+- Authoritative commit: a confirmed commit returns success even if cancellation arrives immediately afterward.
+
 ## Not built yet
 
 API endpoints, authentication and authorization,
-immediate transactions, retry loops, product tables and triggers, the bounded
+product tables and triggers, the bounded
 two-at-a-time scheduler, `dispatch_cutoff_at` / `call_timeout` /
 `hard_deadline_at` enforcement, cancellation at the dispatch boundary under
 concurrency, startup recovery sweep, idempotency and request hashing, the real
