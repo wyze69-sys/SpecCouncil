@@ -178,6 +178,19 @@ Package `internal/storage/sqlite` provides verified read-only status and termina
 - `Snapshot hash integrity`: `ReadSnapshot` reconstructs ordered evidence units, recomputes canonical hash via `evidence.Freeze`, and fails closed with `ErrSnapshotCorrupted` on mismatch.
 - `Strict UTC timestamp and enum decoding`: all persisted timestamps require UTC RFC3339Nano representation ending in 'Z' with length >= 20; malformed timestamps, enums, or count combinations return typed errors without silent fallback.
 
+### SQLite FIFO session claim and timing policy
+
+Package `internal/storage/sqlite` provides verified atomic single-session FIFO claim and timing policy via `claim.go`:
+
+- `Validated timing policy`: requires positive, bounded durations for `DispatchCutoff`, `CallTimeout`, and `SessionHardDeadline` satisfying `SessionHardDeadline >= DispatchCutoff + CallTimeout`; rejects zero, negative, duration overflow, and impossible relationships; strictly configuration-driven without hardcoded production defaults.
+- `Single active session constraint`: enforces at most one session in `reviewing` status across the database; returning a typed no-work result (`Claimed: false`, `NoWorkReason: NoWorkActiveReviewing`) without error when another session is reviewing.
+- `Authoritative FIFO ordering`: selects the oldest queued session by `created_at ASC, id ASC`; includes sessions with `cancel_requested = 1`.
+- `Atomic timing mutation`: executes within a dedicated single `withImmediate` transaction transitioning exactly one session from `queued` to `reviewing`, setting `claimed_at = now`, `dispatch_cutoff_at = now + DispatchCutoff`, and `hard_deadline_at = now + SessionHardDeadline` formatted in UTC RFC3339Nano with 'Z' suffix.
+- `Guarded update and no-work handling`: returns a typed no-work result when no queued session exists (`NoWorkNoQueuedSession`) or when the guarded update affects zero rows (`NoWorkGuardConflict`), leaving database state untouched.
+- `Non-claimable states`: rejects and never transitions terminal (`complete`, `partial`, `failed`), already reviewing, or malformed sessions.
+- `Role run preservation`: all four canonical role runs remain in `pending` status; no roles set to in-flight; no composer, provider, worker, or API invocation.
+- `Concurrency protection`: concurrent claim attempts serialize through SQLite immediate transaction locks, guaranteeing exactly one winning claimer.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, the bounded
