@@ -110,9 +110,20 @@ Package `internal/storage/sqlite` provides the verified pure-Go SQLite connectio
 - Cross-pool visibility verified and SQL writes through the read-only pool rejected.
 - Concurrency-safe and idempotent store cleanup closing both pools and joining errors.
 
+### SQLite schema migrations
+
+Package `internal/storage/sqlite` provides the embedded, ordered, checksummed SQLite migration runner:
+
+- Manifest validation enforcing `^[0-9]{3}_[a-z][a-z0-9_]*\.sql$` filenames, decimal versions 001–999, non-empty SQL bytes, and rejecting malformed names, version 000, duplicate versions, and non-empty subdirectories.
+- SHA-256 checksums computed over exact embedded SQL bytes.
+- Atomic execution of each migration's SQL and metadata recording (`schema_migrations` tracking table with numeric version, exact name, checksum, and UTC applied time in RFC3339Nano format).
+- Fail-closed verification comparing existing metadata rows against the manifest on every run; rejecting missing applied versions, name mismatches, or checksum mismatches.
+- Idempotent reopen without modifying applied timestamps or re-running applied migrations.
+- Context cancellation respected before and during migration execution.
+
 ## Not built yet
 
-API endpoints, authentication and authorization, SQLite schema migrations,
+API endpoints, authentication and authorization,
 immediate transactions, retry loops, product tables and triggers, the bounded
 two-at-a-time scheduler, `dispatch_cutoff_at` / `call_timeout` /
 `hard_deadline_at` enforcement, cancellation at the dispatch boundary under
