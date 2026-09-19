@@ -232,11 +232,25 @@ Package `internal/storage/sqlite` provides verified atomic, compare-and-set role
 - `All-or-nothing transaction rollback`: validation failures, constraint violations, or commit errors abort and roll back the transaction completely, preserving the role in `in_flight` and inserting no findings or references.
 - `Strict persistence scope and field preservation`: preserves snapshot rows and all session fields (`status`, `cancel_requested`, `completed_role_count`, `incomplete_role_count`, `terminal_reason`, timestamps) without modification; never composes session verdicts or invokes providers, workers, HTTP, or composer logic.
 
+### SQLite control sweeps and restart recovery
+
+Package `internal/storage/sqlite` provides verified atomic, idempotent control sweeps and restart recovery via `sweep.go`:
+
+- `Immediate transaction execution`: all sweeps execute within dedicated immediate transactions using `withImmediate`, serializing mutations and honoring bounded busy retries.
+- `Authoritative UPDATE predicates`: all updates re-verify session status and timing boundaries directly in SQL `WHERE` clauses with `EXISTS` subqueries, ensuring state guards are respected under concurrent modifications.
+- `Cancellation sweep`: scoped to a reviewing session; pending roles atomically transition to `interrupted` with cause `user_cancelled` and record `completed_at`; in-flight and terminal roles remain untouched; queued and terminal sessions are safe no-ops; fully idempotent and concurrency-safe.
+- `Cutoff sweep`: scoped to a reviewing session and injected `now`; pending roles atomically transition to `interrupted` with cause `deadline_cutoff` when `now >= dispatch_cutoff_at`; before cutoff is a no-op; in-flight and terminal roles remain untouched; queued and terminal sessions are safe no-ops.
+- `Hard-deadline sweep`: scoped to a reviewing session and injected `now`; pending roles atomically transition to `interrupted` with cause `deadline_cutoff`; in-flight roles are not rewritten in storage; exposes the exact set of in-flight role IDs and canonical role metadata for caller local cancellation and P9 timeout publication.
+- `Restart recovery sweep`: operates on stale reviewing sessions selected by an explicit cutoff timestamp (`claimed_at <= cutoff`); in-flight roles transition to `interrupted` with cause `process_restart`; pending roles transition to `interrupted/user_cancelled` when session `cancel_requested = 1` or `interrupted/process_restart` otherwise; completed, failed, and already interrupted roles remain unchanged; queued sessions are untouched; supports both database-wide multi-session sweeps and single-session recovery.
+- `Scoped error handling`: unknown session IDs and project mismatches fail closed with typed `SessionNotFoundError` matching `ErrNotFound` / `ErrSessionNotFound`.
+- `Transaction rollback`: validation failures, constraint violations, and injected commit errors roll back completely, preserving pending and in-flight states.
+- `Strict persistence scope`: preserves snapshots, evidence units, findings, basis citations, session status, counts, deadlines, and role call counts without modification; never invokes providers, starts worker loops or goroutines, or executes composer verdict logic.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, provider call execution,
-control sweeps and restart recovery (P10), transactional composer (P11),
-the real provider adapter, and supervised worker process orchestration.
+transactional composer (P11), the real provider adapter, and supervised worker
+process orchestration.
 
 ## Known implementation gaps against the canonical flow
 
