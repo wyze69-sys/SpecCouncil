@@ -88,7 +88,13 @@ A packet adds focused checks. Commit only when both focused and full gates pass.
 P0 Canonical domain alignment
  |
  v
-P1 Store opening + migration runner + busy retry boundary
+P1A SQLite store opening + read-only pool
+ |
+ v
+P1B Checksummed migration runner
+ |
+ v
+P1C BEGIN IMMEDIATE + bounded busy retry
  |
  v
 P2 Core schema
@@ -124,9 +130,11 @@ P5 Read models       P6 FIFO claim + timing policy
 
 | Slice | Deliverable | Depends on | Status |
 |---|---|---|---|
-| P0 | Canonical composer/reason/count/report contract | current core | READY |
-| P1 | SQLite open/close, checksummed migrator, read-only pool, bounded busy retry | P0 | BLOCKED |
-| P2 | Core tables, enum/check/FK/unique constraints | P1 | BLOCKED |
+| P0 | Canonical composer/reason/count/report contract | current core | COMPLETE (`171b9d2`) |
+| P1A | SQLite open/close, writer pragmas, and read-only pool | P0 | READY |
+| P1B | Ordered checksummed migration runner | P1A | BLOCKED |
+| P1C | Reusable `BEGIN IMMEDIATE` and bounded busy retry | P1B | BLOCKED |
+| P2 | Core tables, enum/check/FK/unique constraints | P1C | BLOCKED |
 | P3 | State-transition, citation, and immutability triggers | P2 | BLOCKED |
 | P4 | Request hash v1 and atomic create/idempotency | P3 | BLOCKED |
 | P5 | Deterministic read models | P4 | BLOCKED |
@@ -156,36 +164,48 @@ Remove stale semantics before they enter the schema:
 
 Forbidden: persistence, worker, API, or provider behavior.
 
-### P1 — Store, migrator, and retry boundary
+### P1A — Store opening and read-only pool
 
-Planned package:
+Create the pure-Go SQLite package and connection lifecycle only:
 
-```text
-internal/storage/sqlite/
-  migrations/
-  store.go
-  migrate.go
-  immediate.go
-  errors.go
-  *_test.go
-```
+- validate a real file path plus positive busy timeout;
+- open one writer pool with exactly one connection;
+- enforce and verify foreign keys, WAL, and busy timeout;
+- open a distinct `mode=ro` pool after writer initialization;
+- prove read-only writes fail and committed writer data is visible;
+- close partial resources on open failure and surface close errors.
 
-Required behavior:
+No migrator, transaction helper, retry loop, or product table in P1A.
 
-- open/close file database with WAL, foreign keys, busy timeout, and documented
-  UTC timestamp handling;
-- expose a separate read-only pool that cannot execute writes;
-- apply ordered embedded migrations atomically;
-- store version, filename, SHA-256 checksum, and applied timestamp;
-- opening again is idempotent; checksum mismatch and failed migration fail closed;
-- immediate transaction helper pins one connection, uses `BEGIN IMMEDIATE`,
-  commits/rolls back safely, retries only busy/locked errors up to configured
-  `DB_RETRIES`, and returns typed exhaustion;
-- validation/conflict/stale errors are never retried.
+### P1B — Checksummed migration runner
 
-No product tables are required yet; migrator tests use controlled migration
-fixtures. Supervisor exit is a later worker responsibility; this layer must expose
-retry exhaustion distinctly.
+Add embedded numbered migrations and migration metadata:
+
+- parse and order `NNN_name.sql`; reject malformed/duplicate/empty input;
+- compute SHA-256 over exact SQL bytes;
+- atomically apply SQL plus metadata containing version, name, checksum, and UTC
+  applied timestamp;
+- unchanged reopen is idempotent;
+- changed name/checksum for an applied version fails closed;
+- failed SQL rolls back effects and metadata;
+- tests inject controlled `fs.FS` fixtures.
+
+P1B still adds no SpecCouncil product table; P2 owns the first production schema.
+
+### P1C — Immediate transactions and bounded busy retry
+
+Add the reusable write boundary:
+
+- pin a dedicated connection and use explicit `BEGIN IMMEDIATE`;
+- commit callback success; roll back callback error/panic;
+- retry only structured SQLite `BUSY`/`LOCKED` codes;
+- maximum attempts are `1 + DB_RETRIES`;
+- honor context cancellation and configured backoff;
+- typed exhaustion records attempt count and preserves the last driver error;
+- domain/validation/conflict/stale errors are never retried.
+
+Supervisor exit is a later worker responsibility. P1C exposes retry exhaustion
+distinctly for that phase.
 
 ### P2 — Core schema
 
@@ -407,7 +427,7 @@ go test -race ./...
 
 ## Persistence phase definition of done
 
-- P0–P12 each have an independently verified commit.
+- P0, P1A–P1C, and P2–P12 each have an independently verified commit.
 - Every acceptance case is executable test evidence.
 - Normal tests, race tests, vet, formatting, and diff checks pass.
 - Final tree is clean and contains no later-phase code.
