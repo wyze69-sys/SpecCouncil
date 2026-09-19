@@ -246,11 +246,24 @@ Package `internal/storage/sqlite` provides verified atomic, idempotent control s
 - `Transaction rollback`: validation failures, constraint violations, and injected commit errors roll back completely, preserving pending and in-flight states.
 - `Strict persistence scope`: preserves snapshots, evidence units, findings, basis citations, session status, counts, deadlines, and role call counts without modification; never invokes providers, starts worker loops or goroutines, or executes composer verdict logic.
 
+### SQLite transactional session composition and terminal reports
+
+Package `internal/storage/sqlite` provides verified atomic, idempotent transactional session composition via `compose.go`:
+
+- `Immediate transaction execution`: composes a terminal session within a single dedicated immediate transaction using `withImmediate`, serializing mutations on the writer pool and honoring bounded busy retries.
+- `Non-terminal refusal`: reads all four committed role runs, findings, and citations inside the transaction; refuses composition unless all four roles are terminal and zero in-flight or pending roles remain; returns typed `SessionNotReadyError` matching `ErrSessionNotReady` and makes zero writes. Queued sessions are refused without modification.
+- `Canonical verdict rules and reason precedence`: applies frozen `review.Compose` rules deriving status (`complete`, `partial`, `failed`) and terminal reason (`all_roles_complete`, `user_cancelled`, `process_restart`, `deadline_cutoff`, `role_failures`) strictly from committed role runs.
+- `Deterministic total ordering`: report findings and citations follow the deterministic order (`severity rank, role rank, primary basis_ref, category, finding id`) and ordinal ascending links. Failed and interrupted roles contribute zero findings.
+- `Compare-and-set terminal transition`: atomically updates `sessions` requiring status to remain `reviewing`, recording status, terminal reason, completed/incomplete counts, and UTC RFC3339Nano `terminal_at`.
+- `Idempotency and concurrency safety`: duplicate composition is an idempotent read of the committed terminal state returning `AlreadyTerminal: true` without mutating data or timestamps. Stale concurrent composers lose compare-and-set without overwriting terminal state.
+- `All-or-nothing transaction rollback`: injected commit errors or malformed persisted role data abort and roll back completely; no partial terminal state is persisted.
+- `Read-only terminal report access`: `ReadReport` and `ReadTerminalReport` execute via the read-only pool, returning the exact deterministic terminal report bytes once terminal, and failing closed with typed `SessionNotTerminalError` matching `ErrNotTerminal` when non-terminal.
+- `Strict persistence scope and row preservation`: snapshots, evidence units, findings, basis references, role rows, cancellation flag, claim/cutoff/deadline timestamps, and role call counts are strictly immutable and left untouched. No provider calls or worker loops are invoked.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, provider call execution,
-transactional composer (P11), the real provider adapter, and supervised worker
-process orchestration.
+the real provider adapter, and supervised worker process orchestration.
 
 ## Known implementation gaps against the canonical flow
 
