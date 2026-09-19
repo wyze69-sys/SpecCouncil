@@ -191,6 +191,18 @@ Package `internal/storage/sqlite` provides verified atomic single-session FIFO c
 - `Role run preservation`: all four canonical role runs remain in `pending` status; no roles set to in-flight; no composer, provider, worker, or API invocation.
 - `Concurrency protection`: concurrent claim attempts serialize through SQLite immediate transaction locks, guaranteeing exactly one winning claimer.
 
+### SQLite idempotent cancellation request
+
+Package `internal/storage/sqlite` provides verified atomic, idempotent cancellation request mutation via `cancel.go`:
+
+- `Immediate transaction execution`: executes within a dedicated single `withImmediate` transaction acquiring `BEGIN IMMEDIATE`.
+- `Atomic mutation on queued and reviewing sessions`: transitions `cancel_requested` from 0 to 1 atomically for sessions in `queued` or `reviewing` status, returning `Effective: true` and the committed session read model.
+- `Strict idempotency`: repeating cancellation on an already requested session (1 -> 1) succeeds, returning `Effective: false` without updating fields, timestamps, or role rows.
+- `Terminal session no-op`: terminal sessions (`complete`, `partial`, `failed`) are never mutated, reopened, or updated; returning `Effective: false`, `AlreadyTerminal: true`, `NoOp: true`, and the committed session read model.
+- `Typed session not-found`: unknown session IDs and project ID mismatches fail closed with typed `SessionNotFoundError` matching `ErrNotFound` / `ErrSessionNotFound`.
+- `Scope preservation`: leaves status, role runs, terminal reason, role counts, deadlines, timestamps, and findings completely unchanged; no worker, dispatch, composer, or provider invocation.
+- `Concurrency safety`: concurrent cancellation attempts serialize through SQLite immediate transaction locks, ensuring exactly one winning attempt reports `Effective: true` while all concurrent callers receive consistent committed state.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, the bounded
