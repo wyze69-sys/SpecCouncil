@@ -217,12 +217,26 @@ Package `internal/storage/sqlite` provides verified atomic, guarded pending-role
 - `Cancellation and cutoff race safety`: a concurrent cancellation committing before the guarded update prevents reservation; a reservation committing first remains legitimately in-flight while cancellation follows.
 - `Strict persistence scope`: leaves session status, cancel flag, and other role rows completely untouched; never calls providers, starts goroutines, or holds transactions over external work.
 
+### SQLite compare-and-set role publication
+
+Package `internal/storage/sqlite` provides verified atomic, compare-and-set role publication via `publish.go`:
+
+- `Immediate transaction execution`: operates within a dedicated immediate transaction using `withImmediate`, serializing concurrent publishers on the writer pool.
+- `Compare-and-set guard`: requires the target role run to currently be in `in_flight` status, verifying session ID and role-run ID inside the transaction; rechecking in the authoritative `UPDATE` statement's `WHERE` clause.
+- `Atomic success publication`: atomically inserts validated findings and basis references, and transitions the role run from `in_flight` to `complete`, recording call count (1..2) and `completed_at` in UTC RFC3339Nano with 'Z' suffix.
+- `Atomic failure publication`: atomically transitions the role run from `in_flight` to `failed`, recording canonical error category, error message, call count (0..2), and `completed_at`; inserts zero findings or basis references.
+- `Late, duplicate, and stale rejection`: returns a typed `PublicationConflictError` matching `ErrPublicationConflict` when encountering non-in-flight roles (stale `pending`, duplicate or late `complete`/`failed`/`interrupted`); makes zero modifications.
+- `Terminal role state immutability`: terminal role states (`complete`, `failed`, `interrupted`) are never overwritten or transitioned.
+- `Input validation and ordering enforcement`: strictly validates findings and basis references before and during execution; enforces at most 15 findings, non-empty and unique finding IDs, canonical severities, non-empty categories, bounded issue/recommendation (1..1000 characters), 1..5 basis refs per finding, unique basis refs within a finding, and 1-indexed basis ordinals.
+- `Snapshot citation integrity`: verifies all cited basis references exist in the session's frozen snapshot as evidence units, rejecting unknown citations and cross-snapshot citations.
+- `All-or-nothing transaction rollback`: validation failures, constraint violations, or commit errors abort and roll back the transaction completely, preserving the role in `in_flight` and inserting no findings or references.
+- `Strict persistence scope and field preservation`: preserves snapshot rows and all session fields (`status`, `cancel_requested`, `completed_role_count`, `incomplete_role_count`, `terminal_reason`, timestamps) without modification; never composes session verdicts or invokes providers, workers, HTTP, or composer logic.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, provider call execution,
-compare-and-set role publication (P9), control sweeps and restart recovery (P10),
-transactional composer (P11), the real provider adapter, and supervised worker
-process orchestration.
+control sweeps and restart recovery (P10), transactional composer (P11),
+the real provider adapter, and supervised worker process orchestration.
 
 ## Known implementation gaps against the canonical flow
 
