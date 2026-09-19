@@ -260,6 +260,16 @@ Package `internal/storage/sqlite` provides verified atomic, idempotent transacti
 - `Read-only terminal report access`: `ReadReport` and `ReadTerminalReport` execute via the read-only pool, returning the exact deterministic terminal report bytes once terminal, and failing closed with typed `SessionNotTerminalError` matching `ErrNotTerminal` when non-terminal.
 - `Strict persistence scope and row preservation`: snapshots, evidence units, findings, basis references, role rows, cancellation flag, claim/cutoff/deadline timestamps, and role call counts are strictly immutable and left untouched. No provider calls or worker loops are invoked.
 
+### SQLite end-to-end persistence and concurrency proof
+
+Package `internal/storage/sqlite` provides verified end-to-end integration and concurrency proofs across the complete persistence lifecycle via `persistence_e2e_test.go`:
+
+- `Full lifecycle integration`: submit creates immutable snapshots, ordered evidence units, queued sessions, and four pending roles; FIFO claim assigns reviewing status with exact timing fields; guarded dispatch reserves at most two in-flight roles respecting canonical order; compare-and-set publication persists findings and citations atomically or records failure metadata; cancellation, cutoff, deadline, and restart sweeps transition pending and in-flight roles deterministically; transactional composition finalizes sessions and persists deterministic reports.
+- `Strict immutability and table snapshots`: snapshots, evidence units, findings, and citation links are strictly immutable and reject update/delete; read-only pool queries (`ReadStatus`, `ReadReport`, `ReadSnapshot`) leave all database tables completely unchanged as verified by before/after database state snapshots.
+- `Barrier-synchronized concurrency`: concurrent claimers, dispatchers, publishers, sweepers, and composers resolve through SQLite immediate transaction serialization and compare-and-set guards, ensuring exactly one winning actor where required, no lost updates, and idempotent secondary operations without data divergence.
+- `Failure and boundary handling`: busy/locked retry exhaustion returns typed `PersistenceUnavailable` at the configured bound; non-terminal report queries fail closed with `SessionNotTerminalError`; tampered migration checksums prevent the store from opening.
+- `Forbidden scope verification`: guarantees zero worker loops, goroutine-held SQLite transactions, provider invocations, network calls, HTTP/auth routes, or UI code in the persistence layer.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, provider call execution,
