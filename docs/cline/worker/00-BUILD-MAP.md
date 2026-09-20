@@ -57,7 +57,9 @@ W3 serialized guarded dispatch loop COMPLETE (150303f)
 W4 role execution deadlines and provider-attempt budget COMPLETE
  |
  v
-W5 publication/composition integration and supervisor boundary
+W5 publication/composition integration and supervisor boundary READY
+
+W5 packet: `docs/cline/worker/W5-PUBLICATION-COMPOSITION.md`
 ```
 
 ## Definition of done
