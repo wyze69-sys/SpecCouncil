@@ -45,10 +45,10 @@ git status --short
 ## DAG
 
 ```text
-W1 exclusive process ownership + crash-safe lock [VERIFIED]
+W1 exclusive process ownership + crash-safe lock COMPLETE (8798053)
  |
  v
-W2 restart recovery + single-session claim loop
+W2 restart recovery + single-session claim loop READY
  |
  v
 W3 serialized guarded dispatch loop
