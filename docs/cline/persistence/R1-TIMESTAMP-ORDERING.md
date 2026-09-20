@@ -2,9 +2,10 @@
 
 ## Mission
 
-Repair only the timestamp defect found in the P0–P12 audit. Start from clean
-`a930f36`. Do not fix cancellation, deadline guards, findings triggers, or
-snapshot hash validation in this slice.
+Repair only the timestamp defect found in the P0–P12 audit. The implementation
+base is clean commit `a930f36`; execute from latest master at packet-release
+commit `34744c9`, which adds this packet only. Do not fix cancellation, deadline
+guards, findings triggers, or snapshot hash validation in this slice.
 
 ## Defect
 
