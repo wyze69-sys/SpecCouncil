@@ -62,7 +62,7 @@ func Open(cfg Config) (*Store, error) {
 	return openStore(context.Background(), cfg, sqlOpen)
 }
 
-func openStore(ctx context.Context, cfg Config, opener sqlOpener) (*Store, error) {
+func openStore(ctx context.Context, cfg Config, opener sqlOpener) (store *Store, retErr error) {
 	cleanPath, err := validateConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
@@ -82,12 +82,14 @@ func openStore(ctx context.Context, cfg Config, opener sqlOpener) (*Store, error
 	)
 	defer func() {
 		if !success {
+			var closeErr error
 			if readerDB != nil {
-				_ = readerDB.Close()
+				closeErr = errors.Join(closeErr, readerDB.Close())
 			}
 			if writerDB != nil {
-				_ = writerDB.Close()
+				closeErr = errors.Join(closeErr, writerDB.Close())
 			}
+			retErr = errors.Join(retErr, closeErr)
 		}
 	}()
 
@@ -173,7 +175,7 @@ func openStore(ctx context.Context, cfg Config, opener sqlOpener) (*Store, error
 
 	success = true
 
-	store := &Store{
+	store = &Store{
 		cfg:           cfg,
 		canonicalPath: cleanPath,
 		writer:        writerDB,

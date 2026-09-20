@@ -138,6 +138,8 @@ func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
 		{version: 2, name: "core_schema"},
 		{version: 3, name: "state_guards"},
 		{version: 4, name: "findings_insert_guard"},
+		{version: 5, name: "basis_refs_insert_guard"},
+		{version: 6, name: "normalize_legacy_timestamps"},
 	}
 
 	if len(manifest) != len(expectedMigrations) {
@@ -444,6 +446,8 @@ func TestMigrate_FreshDatabaseAppliesPending(t *testing.T) {
 		{version: 2, name: "core_schema"},
 		{version: 3, name: "state_guards"},
 		{version: 4, name: "findings_insert_guard"},
+		{version: 5, name: "basis_refs_insert_guard"},
+		{version: 6, name: "normalize_legacy_timestamps"},
 	}
 
 	if len(applied) != len(expectedApplied) {
@@ -515,8 +519,8 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	initialApplied := queryAppliedMigrations(t, writer)
-	if len(initialApplied) != 4 {
-		t.Fatalf("expected 4 rows, got %d", len(initialApplied))
+	if len(initialApplied) != 6 {
+		t.Fatalf("expected 5 rows, got %d", len(initialApplied))
 	}
 	originalTimestamps := make(map[int]string)
 	for _, m := range initialApplied {
@@ -534,8 +538,8 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	afterSecond := queryAppliedMigrations(t, writer)
-	if len(afterSecond) != 4 {
-		t.Fatalf("expected 4 rows, got %d", len(afterSecond))
+	if len(afterSecond) != 6 {
+		t.Fatalf("expected 5 rows, got %d", len(afterSecond))
 	}
 	for _, m := range afterSecond {
 		if m.AppliedAt != originalTimestamps[m.Version] {
@@ -562,8 +566,8 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	afterReopen := queryAppliedMigrations(t, reopenedWriter)
-	if len(afterReopen) != 4 {
-		t.Fatalf("expected 4 rows, got %d", len(afterReopen))
+	if len(afterReopen) != 6 {
+		t.Fatalf("expected 5 rows, got %d", len(afterReopen))
 	}
 	for _, m := range afterReopen {
 		if m.AppliedAt != originalTimestamps[m.Version] {

@@ -10,7 +10,7 @@ import (
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
 )
 
-// 1. Fresh store migrates includes 004_findings_insert_guard.sql (verify schema_migrations count becomes 4 after Migrate()).
+// 1. Fresh store migrates includes 005_basis_refs_insert_guard.sql (verify schema_migrations count becomes 5 after Migrate()).
 func TestFindingsInsertGuard_1_FreshStoreMigrationCount(t *testing.T) {
 	store, writer := openGuardTestStore(t)
 	ctx := context.Background()
@@ -20,21 +20,21 @@ func TestFindingsInsertGuard_1_FreshStoreMigrationCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if count != 4 {
-		t.Fatalf("expected 4 migrations applied, got %d", count)
+	if count != 6 {
+		t.Fatalf("expected 6 migrations applied, got %d", count)
 	}
 
 	var version int
 	var name, checksum string
-	err = writer.QueryRowContext(ctx, "SELECT version, name, checksum FROM schema_migrations WHERE version = 4;").Scan(&version, &name, &checksum)
+	err = writer.QueryRowContext(ctx, "SELECT version, name, checksum FROM schema_migrations WHERE version = 5;").Scan(&version, &name, &checksum)
 	if err != nil {
-		t.Fatalf("query migration 4: %v", err)
+		t.Fatalf("query migration 5: %v", err)
 	}
-	if version != 4 {
-		t.Errorf("version = %d, want 4", version)
+	if version != 5 {
+		t.Errorf("version = %d, want 5", version)
 	}
-	if name != "findings_insert_guard" {
-		t.Errorf("name = %q, want %q", name, "findings_insert_guard")
+	if name != "basis_refs_insert_guard" {
+		t.Errorf("name = %q, want %q", name, "basis_refs_insert_guard")
 	}
 	if len(checksum) != 64 {
 		t.Errorf("checksum length = %d, want 64", len(checksum))
@@ -269,8 +269,8 @@ func TestFindingsInsertGuard_6_MigrateIdempotency(t *testing.T) {
 	}
 
 	rowsBefore := queryAppliedMigrations(t, writer)
-	if len(rowsBefore) != 4 {
-		t.Fatalf("expected 4 applied migrations, got %d", len(rowsBefore))
+	if len(rowsBefore) != 6 {
+		t.Fatalf("expected 6 applied migrations, got %d", len(rowsBefore))
 	}
 
 	// Re-run Migrate on same store
@@ -279,8 +279,8 @@ func TestFindingsInsertGuard_6_MigrateIdempotency(t *testing.T) {
 	}
 
 	rowsAfter := queryAppliedMigrations(t, writer)
-	if len(rowsAfter) != 4 {
-		t.Fatalf("expected 4 applied migrations after second migrate, got %d", len(rowsAfter))
+	if len(rowsAfter) != 6 {
+		t.Fatalf("expected 6 applied migrations after second migrate, got %d", len(rowsAfter))
 	}
 
 	for i := range rowsBefore {
@@ -348,5 +348,49 @@ func TestFindingsInsertGuard_7_CoexistWithStateGuards(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "snapshots are immutable") {
 		t.Errorf("expected error to contain 'snapshots are immutable', got: %v", err)
+	}
+}
+
+func TestFindingsInsertGuard_8_RejectBasisRefAfterRoleTerminal(t *testing.T) {
+	_, writer := openGuardTestStore(t)
+	ctx := context.Background()
+
+	insertSnapshotAndUnit(t, writer, "snap_basis_guard", "eu_basis_guard")
+	insertSession(t, writer, "sess_basis_guard", "snap_basis_guard", "reviewing")
+	insertRoleRun(t, writer, "rr_basis_guard", "sess_basis_guard", "requirements", "in_flight")
+
+	_, err := writer.ExecContext(ctx, `
+		INSERT INTO findings (id, role_run_id, finding_id, severity, category, issue, recommendation, created_at)
+		VALUES ('f_basis_guard', 'rr_basis_guard', 'find-1', 'high', 'sec', 'issue', 'rec', '2026-09-19T12:01:00Z');
+	`)
+	if err != nil {
+		t.Fatalf("insert finding: %v", err)
+	}
+
+	_, err = writer.ExecContext(ctx, `
+		INSERT INTO finding_basis_refs (id, finding_id, evidence_unit_id, ordinal)
+		VALUES ('ref_basis_guard_1', 'f_basis_guard', 'eu_basis_guard', 1);
+	`)
+	if err != nil {
+		t.Fatalf("insert basis ref while in_flight: %v", err)
+	}
+
+	if _, err = writer.ExecContext(ctx, `
+		UPDATE role_runs
+		SET status = 'complete', completed_at = '2026-09-19T12:02:00Z', call_count = 1
+		WHERE id = 'rr_basis_guard';
+	`); err != nil {
+		t.Fatalf("transition role to complete: %v", err)
+	}
+
+	_, err = writer.ExecContext(ctx, `
+		INSERT INTO finding_basis_refs (id, finding_id, evidence_unit_id, ordinal)
+		VALUES ('ref_basis_guard_2', 'f_basis_guard', 'eu_basis_guard', 2);
+	`)
+	if err == nil {
+		t.Fatal("expected basis-ref insert after terminal transition to fail")
+	}
+	if !strings.Contains(err.Error(), "finding basis references may only be inserted while role is in_flight") {
+		t.Fatalf("unexpected basis-ref guard error: %v", err)
 	}
 }

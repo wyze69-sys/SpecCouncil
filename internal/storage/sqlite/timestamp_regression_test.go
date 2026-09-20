@@ -9,6 +9,58 @@ import (
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
 )
 
+func TestTimestampMigrationNormalizesLegacyWholeSecondRows(t *testing.T) {
+	ctx := context.Background()
+	store, _ := setupTestStore(t, 100*time.Millisecond)
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+	writer, err := store.writerDB()
+	if err != nil {
+		t.Fatalf("writerDB: %v", err)
+	}
+
+	if _, err := writer.ExecContext(ctx, "DELETE FROM schema_migrations WHERE version = 6;"); err != nil {
+		t.Fatalf("remove migration 6 receipt: %v", err)
+	}
+
+	if _, err := writer.ExecContext(ctx, `
+		INSERT INTO snapshots (id, hash, project_id, title, content, normalization_version, created_at)
+		VALUES ('legacy_snap', '012345678901234567890123456789012345678901234567890123456789abcd', 'legacy_proj', 'Legacy', 'Legacy content', 1, '2026-09-19T12:00:00Z');
+		INSERT INTO sessions (id, project_id, idempotency_key, request_hash, snapshot_id, status, created_at)
+		VALUES ('legacy_session', 'legacy_proj', 'legacy_key', '012345678901234567890123456789012345678901234567890123456789abcd', 'legacy_snap', 'queued', '2026-09-19T12:00:00Z');
+		INSERT INTO role_runs (id, session_id, role, status, created_at)
+		VALUES
+		 ('legacy_rr_req', 'legacy_session', 'requirements', 'pending', '2026-09-19T12:00:00Z'),
+		 ('legacy_rr_arch', 'legacy_session', 'architecture', 'pending', '2026-09-19T12:00:00Z'),
+		 ('legacy_rr_qa', 'legacy_session', 'qa', 'pending', '2026-09-19T12:00:00Z'),
+		 ('legacy_rr_sec', 'legacy_session', 'security', 'pending', '2026-09-19T12:00:00Z');
+	`); err != nil {
+		t.Fatalf("seed legacy rows: %v", err)
+	}
+
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("reapply timestamp migration: %v", err)
+	}
+
+	var createdAt string
+	if err := writer.QueryRowContext(ctx, "SELECT created_at FROM sessions WHERE id = 'legacy_session';").Scan(&createdAt); err != nil {
+		t.Fatalf("read normalized session: %v", err)
+	}
+	if createdAt != "2026-09-19T12:00:00.000000000Z" {
+		t.Fatalf("normalized session created_at = %q", createdAt)
+	}
+
+	policy := TimingPolicy{DispatchCutoff: time.Minute, CallTimeout: time.Minute, SessionHardDeadline: 2 * time.Minute}
+	claim, err := store.ClaimSessionWithNow(ctx, policy, time.Date(2026, 9, 19, 12, 0, 0, 100_000_000, time.UTC))
+	if err != nil {
+		t.Fatalf("claim normalized legacy session: %v", err)
+	}
+	if !claim.Claimed || claim.SessionID != "legacy_session" {
+		t.Fatalf("claim result = %+v", claim)
+	}
+}
+
 func TestTimestampFixedWidthOrderingAndParsing(t *testing.T) {
 	ctx := context.Background()
 	store, _ := setupTestStore(t, 100*time.Millisecond)
