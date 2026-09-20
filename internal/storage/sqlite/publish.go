@@ -358,8 +358,33 @@ func (s *Store) PublishRoleSuccess(ctx context.Context, params PublishSuccessPar
 			}
 		}
 
-		// Compare-and-set UPDATE.
 		completedAtStr := formatUTCTimestamp(now)
+
+		// Insert findings and basis references in the same transaction while role is still in_flight.
+		for _, f := range params.Findings {
+			findingPK := fmt.Sprintf("%s:%s", params.RoleRunID, f.ID)
+			_, fErr := conn.ExecContext(ctx, `
+				INSERT INTO findings (id, role_run_id, finding_id, severity, category, issue, recommendation, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+			`, findingPK, params.RoleRunID, f.ID, string(f.Severity), f.Category, f.Issue, f.Recommendation, completedAtStr)
+			if fErr != nil {
+				return fmt.Errorf("insert finding %q: %w", f.ID, sanitizeError(fErr))
+			}
+
+			for ordinalIdx, ref := range f.BasisRefs {
+				refPK := fmt.Sprintf("%s:%d", findingPK, ordinalIdx+1)
+				euDBID := unitIDToDBID[ref]
+				_, bErr := conn.ExecContext(ctx, `
+					INSERT INTO finding_basis_refs (id, finding_id, evidence_unit_id, ordinal)
+					VALUES (?, ?, ?, ?);
+				`, refPK, findingPK, euDBID, ordinalIdx+1)
+				if bErr != nil {
+					return fmt.Errorf("insert basis ref for finding %q ordinal %d: %w", f.ID, ordinalIdx+1, sanitizeError(bErr))
+				}
+			}
+		}
+
+		// Compare-and-set UPDATE.
 		res, uErr := conn.ExecContext(ctx, `
 			UPDATE role_runs
 			SET status = 'complete',
@@ -383,30 +408,6 @@ func (s *Store) PublishRoleSuccess(ctx context.Context, params PublishSuccessPar
 				ExpectedStatus: domain.RoleInFlight,
 				ActualStatus:   actualStatus,
 				Message:        "compare-and-set failed: role run is no longer in_flight",
-			}
-		}
-
-		// Insert findings and basis references in the same transaction.
-		for _, f := range params.Findings {
-			findingPK := fmt.Sprintf("%s:%s", params.RoleRunID, f.ID)
-			_, fErr := conn.ExecContext(ctx, `
-				INSERT INTO findings (id, role_run_id, finding_id, severity, category, issue, recommendation, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-			`, findingPK, params.RoleRunID, f.ID, string(f.Severity), f.Category, f.Issue, f.Recommendation, completedAtStr)
-			if fErr != nil {
-				return fmt.Errorf("insert finding %q: %w", f.ID, sanitizeError(fErr))
-			}
-
-			for ordinalIdx, ref := range f.BasisRefs {
-				refPK := fmt.Sprintf("%s:%d", findingPK, ordinalIdx+1)
-				euDBID := unitIDToDBID[ref]
-				_, bErr := conn.ExecContext(ctx, `
-					INSERT INTO finding_basis_refs (id, finding_id, evidence_unit_id, ordinal)
-					VALUES (?, ?, ?, ?);
-				`, refPK, findingPK, euDBID, ordinalIdx+1)
-				if bErr != nil {
-					return fmt.Errorf("insert basis ref for finding %q ordinal %d: %w", f.ID, ordinalIdx+1, sanitizeError(bErr))
-				}
 			}
 		}
 

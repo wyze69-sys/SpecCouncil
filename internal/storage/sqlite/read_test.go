@@ -418,13 +418,13 @@ func TestReadReport_DeterministicOrdering(t *testing.T) {
 	seedTerminalSession(t, writer, sessID, "proj_ord", snap.ID,
 		domain.SessionComplete, domain.ReasonAllRolesComplete, false, 4)
 
-	// Insert roles in reverse order: security, qa, architecture, requirements
+	// Insert roles in reverse order: security, qa, architecture, requirements (in_flight to accept findings)
 	reverseRoles := []domain.Role{domain.RoleSecurity, domain.RoleQA, domain.RoleArchitecture, domain.RoleRequirements}
 	for _, r := range reverseRoles {
 		rrID := fmt.Sprintf("%s:%s", sessID, r)
 		_, err := writer.ExecContext(ctx, `INSERT INTO role_runs (
-			id, session_id, role, status, call_count, started_at, completed_at, created_at
-		) VALUES (?, ?, ?, 'complete', 1, ?, ?, ?);`, rrID, sessID, r.String(), nowStr, nowStr, nowStr)
+			id, session_id, role, status, call_count, started_at, created_at
+		) VALUES (?, ?, ?, 'in_flight', 1, ?, ?);`, rrID, sessID, r.String(), nowStr, nowStr)
 		if err != nil {
 			t.Fatalf("insert role %s: %v", r, err)
 		}
@@ -485,6 +485,12 @@ func TestReadReport_DeterministicOrdering(t *testing.T) {
 	// 5. Finding B (Req, High, "find-02")
 	insertFinding("f_B", reqRunID, "find-02", "high", "sec", "Issue B", "Rec B")
 	insertBasisRef("fbr_B1", "f_B", "eu-alpha", 1)
+
+	// Transition all roles to complete now that findings are inserted
+	_, err = writer.ExecContext(ctx, `UPDATE role_runs SET status = 'complete', completed_at = ? WHERE session_id = ?;`, nowStr, sessID)
+	if err != nil {
+		t.Fatalf("transition roles to complete: %v", err)
+	}
 
 	// Read terminal report
 	rep, err := store.ReadReport(ctx, sessID)
@@ -567,27 +573,31 @@ func TestReadReport_FailedAndInterruptedRolesOmitFindings(t *testing.T) {
 	qaRunID := fmt.Sprintf("%s:%s", sessID, domain.RoleQA)
 	secRunID := fmt.Sprintf("%s:%s", sessID, domain.RoleSecurity)
 
-	_, _ = writer.ExecContext(ctx, `INSERT INTO role_runs (id, session_id, role, status, call_count, started_at, completed_at, created_at)
-		VALUES (?, ?, 'requirements', 'complete', 1, ?, ?, ?);`, reqRunID, sessID, nowStr, nowStr, nowStr)
-	_, _ = writer.ExecContext(ctx, `INSERT INTO role_runs (id, session_id, role, status, error_category, call_count, completed_at, created_at)
-		VALUES (?, ?, 'architecture', 'failed', 'timeout', 1, ?, ?);`, archRunID, sessID, nowStr, nowStr)
+	_, _ = writer.ExecContext(ctx, `INSERT INTO role_runs (id, session_id, role, status, call_count, started_at, created_at)
+		VALUES (?, ?, 'requirements', 'in_flight', 1, ?, ?);`, reqRunID, sessID, nowStr, nowStr)
+	_, _ = writer.ExecContext(ctx, `INSERT INTO role_runs (id, session_id, role, status, call_count, started_at, created_at)
+		VALUES (?, ?, 'architecture', 'in_flight', 1, ?, ?);`, archRunID, sessID, nowStr, nowStr)
 	_, _ = writer.ExecContext(ctx, `INSERT INTO role_runs (id, session_id, role, status, cause, call_count, completed_at, created_at)
 		VALUES (?, ?, 'qa', 'interrupted', 'user_cancelled', 0, ?, ?);`, qaRunID, sessID, nowStr, nowStr)
 	_, _ = writer.ExecContext(ctx, `INSERT INTO role_runs (id, session_id, role, status, cause, call_count, completed_at, created_at)
 		VALUES (?, ?, 'security', 'interrupted', 'user_cancelled', 0, ?, ?);`, secRunID, sessID, nowStr, nowStr)
 
-	// Add 1 finding to Requirements (complete)
+	// Add 1 finding to Requirements (while in_flight)
 	euPK := fmt.Sprintf("%s:%s", snap.ID, snap.Units[0].ID)
 	_, _ = writer.ExecContext(ctx, `INSERT INTO findings (id, role_run_id, finding_id, severity, category, issue, recommendation, created_at)
 		VALUES ('f_req', ?, 'find-req-1', 'high', 'req', 'Req issue', 'Req rec', ?);`, reqRunID, nowStr)
 	_, _ = writer.ExecContext(ctx, `INSERT INTO finding_basis_refs (id, finding_id, evidence_unit_id, ordinal)
 		VALUES ('fbr_req', 'f_req', ?, 1);`, euPK)
 
-	// Directly insert findings to Architecture (failed) simulating dirty data
+	// Insert findings to Architecture while in_flight before failing (simulating findings on a role that failed)
 	_, _ = writer.ExecContext(ctx, `INSERT INTO findings (id, role_run_id, finding_id, severity, category, issue, recommendation, created_at)
 		VALUES ('f_arch_rogue', ?, 'find-arch-rogue', 'critical', 'arch', 'Arch issue', 'Arch rec', ?);`, archRunID, nowStr)
 	_, _ = writer.ExecContext(ctx, `INSERT INTO finding_basis_refs (id, finding_id, evidence_unit_id, ordinal)
 		VALUES ('fbr_arch', 'f_arch_rogue', ?, 1);`, euPK)
+
+	// Transition requirements to complete and architecture to failed
+	_, _ = writer.ExecContext(ctx, `UPDATE role_runs SET status = 'complete', completed_at = ? WHERE id = ?;`, nowStr, reqRunID)
+	_, _ = writer.ExecContext(ctx, `UPDATE role_runs SET status = 'failed', completed_at = ?, error_category = 'timeout' WHERE id = ?;`, nowStr, archRunID)
 
 	rep, err := store.ReadReport(ctx, sessID)
 	if err != nil {

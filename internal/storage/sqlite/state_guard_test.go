@@ -817,8 +817,8 @@ func TestStateGuards_Migration003Idempotency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query count before: %v", err)
 	}
-	if countBefore != 3 {
-		t.Fatalf("expected 3 migrations applied, got %d", countBefore)
+	if countBefore != 4 {
+		t.Fatalf("expected 4 migrations applied, got %d", countBefore)
 	}
 
 	// Run migration again
@@ -831,8 +831,8 @@ func TestStateGuards_Migration003Idempotency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query count after: %v", err)
 	}
-	if countAfter != 3 {
-		t.Fatalf("expected count after to remain 3, got %d", countAfter)
+	if countAfter != 4 {
+		t.Fatalf("expected count after to remain 4, got %d", countAfter)
 	}
 }
 
@@ -864,6 +864,7 @@ func TestStateGuards_ForbiddenScopeInspection(t *testing.T) {
 		"finding_basis_refs_citation_update",
 		"finding_basis_refs_no_delete",
 		"finding_basis_refs_no_update",
+		"findings_insert_in_flight_guard",
 		"findings_no_delete",
 		"findings_no_update",
 		"role_runs_immutable_fields",

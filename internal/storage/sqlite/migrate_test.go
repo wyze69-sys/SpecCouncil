@@ -89,6 +89,7 @@ func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
 	found001SQL := false
 	found002SQL := false
 	found003SQL := false
+	found004SQL := false
 	for _, e := range entries {
 		if e.Name() == "embed.go" {
 			foundEmbedGo = true
@@ -101,6 +102,9 @@ func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
 		}
 		if e.Name() == "003_state_guards.sql" {
 			found003SQL = true
+		}
+		if e.Name() == "004_findings_insert_guard.sql" {
+			found004SQL = true
 		}
 	}
 
@@ -116,6 +120,9 @@ func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
 	if !found003SQL {
 		t.Fatalf("expected 003_state_guards.sql to be embedded in migrations.FS")
 	}
+	if !found004SQL {
+		t.Fatalf("expected 004_findings_insert_guard.sql to be embedded in migrations.FS")
+	}
 
 	// Verify discoverManifest walks the tree, ignores embed.go, and discovers production migrations
 	manifest, err := discoverManifest(migrations.FS)
@@ -130,6 +137,7 @@ func TestProductionEmbedding_EmbedsCompleteDirectory(t *testing.T) {
 		{version: 1, name: "migration_metadata"},
 		{version: 2, name: "core_schema"},
 		{version: 3, name: "state_guards"},
+		{version: 4, name: "findings_insert_guard"},
 	}
 
 	if len(manifest) != len(expectedMigrations) {
@@ -435,6 +443,7 @@ func TestMigrate_FreshDatabaseAppliesPending(t *testing.T) {
 		{version: 1, name: "migration_metadata"},
 		{version: 2, name: "core_schema"},
 		{version: 3, name: "state_guards"},
+		{version: 4, name: "findings_insert_guard"},
 	}
 
 	if len(applied) != len(expectedApplied) {
@@ -506,8 +515,8 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	initialApplied := queryAppliedMigrations(t, writer)
-	if len(initialApplied) != 3 {
-		t.Fatalf("expected 3 rows, got %d", len(initialApplied))
+	if len(initialApplied) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(initialApplied))
 	}
 	originalTimestamps := make(map[int]string)
 	for _, m := range initialApplied {
@@ -525,8 +534,8 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	afterSecond := queryAppliedMigrations(t, writer)
-	if len(afterSecond) != 3 {
-		t.Fatalf("expected 3 rows, got %d", len(afterSecond))
+	if len(afterSecond) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(afterSecond))
 	}
 	for _, m := range afterSecond {
 		if m.AppliedAt != originalTimestamps[m.Version] {
@@ -553,8 +562,8 @@ func TestMigrate_IdempotentRerunPreservesTimestamps(t *testing.T) {
 	}
 
 	afterReopen := queryAppliedMigrations(t, reopenedWriter)
-	if len(afterReopen) != 3 {
-		t.Fatalf("expected 3 rows, got %d", len(afterReopen))
+	if len(afterReopen) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(afterReopen))
 	}
 	for _, m := range afterReopen {
 		if m.AppliedAt != originalTimestamps[m.Version] {
