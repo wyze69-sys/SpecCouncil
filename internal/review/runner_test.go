@@ -9,21 +9,22 @@ import (
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
 	"github.com/wyze69-sys/SpecCouncil/internal/evidence"
 	"github.com/wyze69-sys/SpecCouncil/internal/provider"
+	"github.com/wyze69-sys/SpecCouncil/internal/provider/fake"
 )
 
-func script(calls ...provider.ScriptedCall) map[domain.Role][]provider.ScriptedCall {
-	return map[domain.Role][]provider.ScriptedCall{domain.RoleRequirements: calls}
+func script(calls ...fake.ScriptedCall) map[domain.Role][]fake.ScriptedCall {
+	return map[domain.Role][]fake.ScriptedCall{domain.RoleRequirements: calls}
 }
 
-func runOnce(t *testing.T, script map[domain.Role][]provider.ScriptedCall, budget Budget) (RoleOutcome, *provider.FakeProvider) {
+func runOnce(t *testing.T, script map[domain.Role][]fake.ScriptedCall, budget Budget) (RoleOutcome, *fake.FakeProvider) {
 	t.Helper()
-	fake := provider.NewFakeProvider(script)
+	fake := fake.NewFakeProvider(script)
 	out := RunRole(context.Background(), fake, domain.RoleRequirements, testSnapshot(t), budget, DefaultPolicy())
 	return out, fake
 }
 
 func TestHappyPathUsesOneCall(t *testing.T) {
-	out, fake := runOnce(t, script(provider.ScriptedCall{Body: validBody()}), Budget{})
+	out, fake := runOnce(t, script(fake.ScriptedCall{Body: validBody()}), Budget{})
 
 	if out.Status != domain.RoleComplete {
 		t.Fatalf("status = %s, want complete (category %s)", out.Status, out.ErrorCategory)
@@ -40,7 +41,7 @@ func TestHappyPathUsesOneCall(t *testing.T) {
 }
 
 func TestZeroFindingsIsACompleteRole(t *testing.T) {
-	out, _ := runOnce(t, script(provider.ScriptedCall{Body: `{"findings":[]}`}), Budget{})
+	out, _ := runOnce(t, script(fake.ScriptedCall{Body: `{"findings":[]}`}), Budget{})
 
 	if out.Status != domain.RoleComplete {
 		t.Fatalf("status = %s, want complete", out.Status)
@@ -53,8 +54,8 @@ func TestZeroFindingsIsACompleteRole(t *testing.T) {
 // AC-08: 429 then a valid answer completes with two calls, purpose transport_retry.
 func TestRateLimitThenValidUsesTransportRetry(t *testing.T) {
 	out, fake := runOnce(t, script(
-		provider.ScriptedCall{TransportError: domain.ErrTransport, Message: "429 too many requests"},
-		provider.ScriptedCall{Body: validBody()},
+		fake.ScriptedCall{TransportError: domain.ErrTransport, Message: "429 too many requests"},
+		fake.ScriptedCall{Body: validBody()},
 	), Budget{})
 
 	if out.Status != domain.RoleComplete {
@@ -71,8 +72,8 @@ func TestRateLimitThenValidUsesTransportRetry(t *testing.T) {
 // AC-09: bad JSON then a valid repair completes with two calls, purpose format_repair.
 func TestBadJSONThenValidRepairUsesFormatRepair(t *testing.T) {
 	out, fake := runOnce(t, script(
-		provider.ScriptedCall{Body: "not json at all"},
-		provider.ScriptedCall{Body: validBody()},
+		fake.ScriptedCall{Body: "not json at all"},
+		fake.ScriptedCall{Body: validBody()},
 	), Budget{})
 
 	if out.Status != domain.RoleComplete {
@@ -90,8 +91,8 @@ func TestBadJSONThenValidRepairUsesFormatRepair(t *testing.T) {
 // third call.
 func TestRetryThenMalformedFailsWithoutAThirdCall(t *testing.T) {
 	out, fake := runOnce(t, script(
-		provider.ScriptedCall{TransportError: domain.ErrTransport, Message: "connection reset"},
-		provider.ScriptedCall{Body: "still not json"},
+		fake.ScriptedCall{TransportError: domain.ErrTransport, Message: "connection reset"},
+		fake.ScriptedCall{Body: "still not json"},
 	), Budget{})
 
 	if out.Status != domain.RoleFailed {
@@ -111,8 +112,8 @@ func TestRetryThenMalformedFailsWithoutAThirdCall(t *testing.T) {
 // The XOR rule: a repair that then fails at transport is still the last call.
 func TestRepairThenTransportFailureStopsAtTwoCalls(t *testing.T) {
 	out, fake := runOnce(t, script(
-		provider.ScriptedCall{Body: "not json"},
-		provider.ScriptedCall{TransportError: domain.ErrTimeout, Message: "call timed out"},
+		fake.ScriptedCall{Body: "not json"},
+		fake.ScriptedCall{TransportError: domain.ErrTimeout, Message: "call timed out"},
 	), Budget{})
 
 	if out.Status != domain.RoleFailed {
@@ -131,8 +132,8 @@ func TestRepairThenTransportFailureStopsAtTwoCalls(t *testing.T) {
 
 func TestFatalProviderRejectionNeverRetries(t *testing.T) {
 	out, fake := runOnce(t, script(
-		provider.ScriptedCall{TransportError: domain.ErrProviderRejected, Message: "401 unauthorized"},
-		provider.ScriptedCall{Body: validBody()},
+		fake.ScriptedCall{TransportError: domain.ErrProviderRejected, Message: "401 unauthorized"},
+		fake.ScriptedCall{Body: validBody()},
 	), Budget{})
 
 	if out.Status != domain.RoleFailed {
@@ -147,7 +148,7 @@ func TestFatalProviderRejectionNeverRetries(t *testing.T) {
 }
 
 func TestPromptBudgetBlocksEveryCall(t *testing.T) {
-	out, fake := runOnce(t, script(provider.ScriptedCall{Body: validBody()}),
+	out, fake := runOnce(t, script(fake.ScriptedCall{Body: validBody()}),
 		Budget{MaxPromptTokens: 1})
 
 	if out.Status != domain.RoleFailed {
@@ -164,8 +165,8 @@ func TestPromptBudgetBlocksEveryCall(t *testing.T) {
 
 func TestTwoInvalidResponsesFailWithTheValidationCategory(t *testing.T) {
 	out, _ := runOnce(t, script(
-		provider.ScriptedCall{Body: mkResult(mkFinding("F-1", "high", "R-404"))},
-		provider.ScriptedCall{Body: mkResult(mkFinding("F-1", "high", "R-404"))},
+		fake.ScriptedCall{Body: mkResult(mkFinding("F-1", "high", "R-404"))},
+		fake.ScriptedCall{Body: mkResult(mkFinding("F-1", "high", "R-404"))},
 	), Budget{})
 
 	if out.Status != domain.RoleFailed {
@@ -231,12 +232,12 @@ func makeTestSnap(t *testing.T) evidence.Snapshot {
 // runWithTiming is a helper that calls RunRole with a CallTiming value.
 func runWithTiming(
 	t *testing.T,
-	s map[domain.Role][]provider.ScriptedCall,
+	s map[domain.Role][]fake.ScriptedCall,
 	budget Budget,
 	timing CallTiming,
-) (RoleOutcome, *provider.FakeProvider) {
+) (RoleOutcome, *fake.FakeProvider) {
 	t.Helper()
-	fake := provider.NewFakeProvider(s)
+	fake := fake.NewFakeProvider(s)
 	out := RunRole(context.Background(), fake, domain.RoleRequirements,
 		testSnapshot(t), budget, DefaultPolicy(), timing)
 	return out, fake
@@ -251,7 +252,7 @@ func TestRunRoleHardDeadlinePreventsCall(t *testing.T) {
 		Now:            time.Now,
 	}
 	out, fake := runWithTiming(t,
-		script(provider.ScriptedCall{Body: validBody()}),
+		script(fake.ScriptedCall{Body: validBody()}),
 		Budget{}, timing)
 
 	if out.Status != domain.RoleFailed {
@@ -337,9 +338,9 @@ func TestRunRoleBackoffCancelledPreventsSecondCall(t *testing.T) {
 		Sleep:      cancelOnSleep,
 	}
 
-	fake := provider.NewFakeProvider(script(
-		provider.ScriptedCall{TransportError: domain.ErrTransport, Message: "network reset"},
-		provider.ScriptedCall{Body: validBody()},
+	fake := fake.NewFakeProvider(script(
+		fake.ScriptedCall{TransportError: domain.ErrTransport, Message: "network reset"},
+		fake.ScriptedCall{Body: validBody()},
 	))
 
 	snap := makeTestSnap(t)
@@ -385,9 +386,9 @@ func TestRunRoleHardDeadlinePreventsSecondCallAfterRetry(t *testing.T) {
 		Sleep: advancePastDeadline,
 	}
 
-	fake := provider.NewFakeProvider(script(
-		provider.ScriptedCall{TransportError: domain.ErrTransport, Message: "transient"},
-		provider.ScriptedCall{Body: validBody()},
+	fake := fake.NewFakeProvider(script(
+		fake.ScriptedCall{TransportError: domain.ErrTransport, Message: "transient"},
+		fake.ScriptedCall{Body: validBody()},
 	))
 
 	snap := makeTestSnap(t)
@@ -411,9 +412,9 @@ func TestRunRoleHardDeadlinePreventsFormatRepairSecondCall(t *testing.T) {
 	now := baseNow
 
 	badThenGood := &interceptProvider{
-		inner: provider.NewFakeProvider(script(
-			provider.ScriptedCall{Body: "not json"},
-			provider.ScriptedCall{Body: validBody()},
+		inner: fake.NewFakeProvider(script(
+			fake.ScriptedCall{Body: "not json"},
+			fake.ScriptedCall{Body: validBody()},
 		)),
 		afterCall: func() {
 			// Advance clock past deadline after call 1.
@@ -470,7 +471,7 @@ func (b *blockingProvider) Call(ctx context.Context, req provider.Request) (prov
 
 // interceptProvider wraps an inner FakeProvider and calls afterCall after each Call.
 type interceptProvider struct {
-	inner     *provider.FakeProvider
+	inner     *fake.FakeProvider
 	afterCall func()
 }
 

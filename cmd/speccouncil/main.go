@@ -13,7 +13,7 @@ import (
 
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
 	"github.com/wyze69-sys/SpecCouncil/internal/evidence"
-	"github.com/wyze69-sys/SpecCouncil/internal/provider"
+	"github.com/wyze69-sys/SpecCouncil/internal/provider/fake"
 	"github.com/wyze69-sys/SpecCouncil/internal/review"
 )
 
@@ -70,7 +70,7 @@ func run(snapshotPath, scriptPath, sessionID string) error {
 		return err
 	}
 
-	fake := provider.NewFakeProvider(toProviderScript(script))
+	fake := fake.NewFakeProvider(toProviderScript(script))
 	engine := review.Engine{
 		Provider: fake,
 		Budget:   review.Budget{},
@@ -92,12 +92,12 @@ func run(snapshotPath, scriptPath, sessionID string) error {
 	return nil
 }
 
-func toProviderScript(in scriptFile) map[domain.Role][]provider.ScriptedCall {
-	out := make(map[domain.Role][]provider.ScriptedCall, len(in))
+func toProviderScript(in scriptFile) map[domain.Role][]fake.ScriptedCall {
+	out := make(map[domain.Role][]fake.ScriptedCall, len(in))
 	for role, calls := range in {
-		converted := make([]provider.ScriptedCall, 0, len(calls))
+		converted := make([]fake.ScriptedCall, 0, len(calls))
 		for _, c := range calls {
-			converted = append(converted, provider.ScriptedCall{
+			converted = append(converted, fake.ScriptedCall{
 				Body:           c.Body,
 				TransportError: c.TransportError,
 				Message:        c.Message,

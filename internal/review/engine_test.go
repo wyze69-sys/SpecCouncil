@@ -6,24 +6,24 @@ import (
 	"testing"
 
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
-	"github.com/wyze69-sys/SpecCouncil/internal/provider"
+	"github.com/wyze69-sys/SpecCouncil/internal/provider/fake"
 )
 
-func scriptAll(calls ...provider.ScriptedCall) map[domain.Role][]provider.ScriptedCall {
-	m := make(map[domain.Role][]provider.ScriptedCall, domain.RoleCount)
+func scriptAll(calls ...fake.ScriptedCall) map[domain.Role][]fake.ScriptedCall {
+	m := make(map[domain.Role][]fake.ScriptedCall, domain.RoleCount)
 	for _, r := range domain.Roles {
 		m[r] = calls
 	}
 	return m
 }
 
-func newEngine(s map[domain.Role][]provider.ScriptedCall) (Engine, *provider.FakeProvider) {
-	fake := provider.NewFakeProvider(s)
+func newEngine(s map[domain.Role][]fake.ScriptedCall) (Engine, *fake.FakeProvider) {
+	fake := fake.NewFakeProvider(s)
 	return Engine{Provider: fake, Budget: Budget{}, Policy: DefaultPolicy()}, fake
 }
 
 func TestEngineRunsAllFourRolesAndReports(t *testing.T) {
-	eng, fake := newEngine(scriptAll(provider.ScriptedCall{Body: validBody()}))
+	eng, fake := newEngine(scriptAll(fake.ScriptedCall{Body: validBody()}))
 
 	report, err := eng.Run(context.Background(), "rev-1", testSnapshot(t), RunOptions{})
 	if err != nil {
@@ -52,7 +52,7 @@ func TestEngineRunsAllFourRolesAndReports(t *testing.T) {
 
 // AC-04: cancel before the first dispatch makes no provider call at all.
 func TestCancelBeforeFirstDispatchMakesNoProviderCall(t *testing.T) {
-	eng, fake := newEngine(scriptAll(provider.ScriptedCall{Body: validBody()}))
+	eng, fake := newEngine(scriptAll(fake.ScriptedCall{Body: validBody()}))
 
 	report, err := eng.Run(context.Background(), "rev-1", testSnapshot(t),
 		RunOptions{Cancelled: func() bool { return true }})
@@ -81,7 +81,7 @@ func TestCancelBeforeFirstDispatchMakesNoProviderCall(t *testing.T) {
 
 // AC-05 shape: cancellation stops new dispatch but lets started roles finish.
 func TestCancelMidwayKeepsCompletedFindings(t *testing.T) {
-	eng, fake := newEngine(scriptAll(provider.ScriptedCall{Body: validBody()}))
+	eng, fake := newEngine(scriptAll(fake.ScriptedCall{Body: validBody()}))
 
 	dispatches := 0
 	report, err := eng.Run(context.Background(), "rev-1", testSnapshot(t),
@@ -117,15 +117,15 @@ func TestCancelMidwayKeepsCompletedFindings(t *testing.T) {
 func TestReportIsByteIdenticalAcrossRuns(t *testing.T) {
 	body := mkResult(mkFinding("F-1", "high", "R-1"))
 
-	first := runReport(t, scriptAll(provider.ScriptedCall{Body: body}))
-	second := runReport(t, scriptAll(provider.ScriptedCall{Body: body}))
+	first := runReport(t, scriptAll(fake.ScriptedCall{Body: body}))
+	second := runReport(t, scriptAll(fake.ScriptedCall{Body: body}))
 
 	if !reflect.DeepEqual(first, second) {
 		t.Errorf("report is not deterministic:\n%+v\n%+v", first, second)
 	}
 }
 
-func runReport(t *testing.T, s map[domain.Role][]provider.ScriptedCall) Report {
+func runReport(t *testing.T, s map[domain.Role][]fake.ScriptedCall) Report {
 	t.Helper()
 	eng, _ := newEngine(s)
 	report, err := eng.Run(context.Background(), "rev-1", testSnapshot(t), RunOptions{})

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
 )
@@ -65,87 +64,4 @@ func CategoryOf(err error) domain.ErrorCategory {
 // There is no vendor fallback.
 type Provider interface {
 	Call(ctx context.Context, req Request) (Response, error)
-}
-
-// ScriptedCall is one canned provider result used by the fake provider.
-type ScriptedCall struct {
-	// Body is returned when TransportError is empty.
-	Body string
-	// TransportError, when set, is returned instead of a body.
-	TransportError domain.ErrorCategory
-	// Message is optional detail for a transport error.
-	Message string
-	Model   string
-	// DelayMs simulates provider latency.
-	DelayMs int
-}
-
-// FakeProvider is a deterministic provider driven by a script.
-//
-// It is the primary test double: every retry, repair and failure path in the
-// engine is exercised through it without spending a real provider call.
-type FakeProvider struct {
-	mu     sync.Mutex
-	script map[domain.Role][]ScriptedCall
-	calls  []Request
-	next   map[domain.Role]int
-}
-
-// NewFakeProvider builds a fake provider from a per-role call script.
-func NewFakeProvider(script map[domain.Role][]ScriptedCall) *FakeProvider {
-	return &FakeProvider{
-		script: script,
-		next:   make(map[domain.Role]int),
-	}
-}
-
-// Call returns the next scripted result for the requested role.
-func (f *FakeProvider) Call(ctx context.Context, req Request) (Response, error) {
-	if err := ctx.Err(); err != nil {
-		return Response{}, NewError(domain.ErrTimeout, "context ended before call: %v", err)
-	}
-
-	f.mu.Lock()
-	calls := f.script[req.Role]
-	idx := f.next[req.Role]
-	f.calls = append(f.calls, req)
-	if idx >= len(calls) {
-		f.mu.Unlock()
-		return Response{}, NewError(domain.ErrProviderRejected,
-			"fake provider has no scripted call %d for role %s", idx+1, req.Role)
-	}
-	call := calls[idx]
-	f.next[req.Role] = idx + 1
-	f.mu.Unlock()
-
-	if call.TransportError != "" {
-		return Response{}, NewError(call.TransportError, "%s", call.Message)
-	}
-
-	model := call.Model
-	if model == "" {
-		model = "fake-model"
-	}
-	return Response{
-		Body:      []byte(call.Body),
-		Model:     model,
-		TokensIn:  len(req.Prompt) / 4,
-		TokensOut: len(call.Body) / 4,
-	}, nil
-}
-
-// Calls returns a copy of every request the fake provider received, in order.
-func (f *FakeProvider) Calls() []Request {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]Request, len(f.calls))
-	copy(out, f.calls)
-	return out
-}
-
-// CallCount reports how many calls one role made.
-func (f *FakeProvider) CallCount(role domain.Role) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.next[role]
 }

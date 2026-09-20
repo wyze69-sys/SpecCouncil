@@ -9,6 +9,7 @@ import (
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
 	"github.com/wyze69-sys/SpecCouncil/internal/evidence"
 	"github.com/wyze69-sys/SpecCouncil/internal/provider"
+	"github.com/wyze69-sys/SpecCouncil/internal/provider/fake"
 	"github.com/wyze69-sys/SpecCouncil/internal/review"
 )
 
@@ -32,8 +33,8 @@ func validBody() string {
 	return `{"findings":[{"id":"F-1","severity":"high","category":"authorization","issue":"Ownership is unspecified.","recommendation":"State who may edit a project.","basis_refs":["R-1"]}]}`
 }
 
-func scriptExec(calls ...provider.ScriptedCall) map[domain.Role][]provider.ScriptedCall {
-	return map[domain.Role][]provider.ScriptedCall{domain.RoleRequirements: calls}
+func scriptExec(calls ...fake.ScriptedCall) map[domain.Role][]fake.ScriptedCall {
+	return map[domain.Role][]fake.ScriptedCall{domain.RoleRequirements: calls}
 }
 
 // baseConfig returns a valid ExecuteConfig with a far-future hard deadline
@@ -53,9 +54,9 @@ func baseConfig(t *testing.T, p provider.Provider) ExecuteConfig {
 }
 
 // execRole is the convenience entry point for most tests.
-func execRole(t *testing.T, p provider.Provider) (review.RoleOutcome, *provider.FakeProvider) {
+func execRole(t *testing.T, p provider.Provider) (review.RoleOutcome, *fake.FakeProvider) {
 	t.Helper()
-	fake, ok := p.(*provider.FakeProvider)
+	fake, ok := p.(*fake.FakeProvider)
 	if !ok {
 		t.Fatal("execRole requires a *FakeProvider")
 	}
@@ -72,7 +73,7 @@ func execRole(t *testing.T, p provider.Provider) (review.RoleOutcome, *provider.
 // ---------------------------------------------------------------------------
 
 func TestExecuteValidOutputOneCallSuccess(t *testing.T) {
-	fake := provider.NewFakeProvider(scriptExec(provider.ScriptedCall{Body: validBody()}))
+	fake := fake.NewFakeProvider(scriptExec(fake.ScriptedCall{Body: validBody()}))
 	out, _ := execRole(t, fake)
 
 	if out.Status != domain.RoleComplete {
@@ -97,7 +98,7 @@ func TestExecuteValidOutputOneCallSuccess(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteBudgetExhaustionMakesZeroCalls(t *testing.T) {
-	fake := provider.NewFakeProvider(scriptExec(provider.ScriptedCall{Body: validBody()}))
+	fake := fake.NewFakeProvider(scriptExec(fake.ScriptedCall{Body: validBody()}))
 	cfg := baseConfig(t, fake)
 	cfg.Budget = review.Budget{MaxPromptTokens: 1} // impossibly small
 
@@ -122,9 +123,9 @@ func TestExecuteBudgetExhaustionMakesZeroCalls(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteRetryableTransportPermitsOneRetry(t *testing.T) {
-	fake := provider.NewFakeProvider(scriptExec(
-		provider.ScriptedCall{TransportError: domain.ErrTransport, Message: "429"},
-		provider.ScriptedCall{Body: validBody()},
+	fake := fake.NewFakeProvider(scriptExec(
+		fake.ScriptedCall{TransportError: domain.ErrTransport, Message: "429"},
+		fake.ScriptedCall{Body: validBody()},
 	))
 	out, _ := execRole(t, fake)
 
@@ -147,9 +148,9 @@ func TestExecuteRetryableTransportPermitsOneRetry(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteFatalProviderFailureMakesNoSecondCall(t *testing.T) {
-	fake := provider.NewFakeProvider(scriptExec(
-		provider.ScriptedCall{TransportError: domain.ErrProviderRejected, Message: "401 unauthorized"},
-		provider.ScriptedCall{Body: validBody()},
+	fake := fake.NewFakeProvider(scriptExec(
+		fake.ScriptedCall{TransportError: domain.ErrProviderRejected, Message: "401 unauthorized"},
+		fake.ScriptedCall{Body: validBody()},
 	))
 	out, _ := execRole(t, fake)
 
@@ -169,9 +170,9 @@ func TestExecuteFatalProviderFailureMakesNoSecondCall(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteInvalidOutputPermitsOneFormatRepair(t *testing.T) {
-	fake := provider.NewFakeProvider(scriptExec(
-		provider.ScriptedCall{Body: "not json"},
-		provider.ScriptedCall{Body: validBody()},
+	fake := fake.NewFakeProvider(scriptExec(
+		fake.ScriptedCall{Body: "not json"},
+		fake.ScriptedCall{Body: validBody()},
 	))
 	out, _ := execRole(t, fake)
 
@@ -195,9 +196,9 @@ func TestExecuteInvalidOutputPermitsOneFormatRepair(t *testing.T) {
 
 func TestExecuteRetryPathCannotThenFormatRepair(t *testing.T) {
 	// transport_retry already used call 2; bad output on call 2 must fail, no call 3.
-	fake := provider.NewFakeProvider(scriptExec(
-		provider.ScriptedCall{TransportError: domain.ErrTransport, Message: "reset"},
-		provider.ScriptedCall{Body: "still not json"},
+	fake := fake.NewFakeProvider(scriptExec(
+		fake.ScriptedCall{TransportError: domain.ErrTransport, Message: "reset"},
+		fake.ScriptedCall{Body: "still not json"},
 	))
 	out, _ := execRole(t, fake)
 
@@ -214,9 +215,9 @@ func TestExecuteRetryPathCannotThenFormatRepair(t *testing.T) {
 
 func TestExecuteRepairPathCannotThenTransportRetry(t *testing.T) {
 	// format_repair used as call 2; transport failure on call 2 must fail, no call 3.
-	fake := provider.NewFakeProvider(scriptExec(
-		provider.ScriptedCall{Body: "not json"},
-		provider.ScriptedCall{TransportError: domain.ErrTransport, Message: "transport on repair"},
+	fake := fake.NewFakeProvider(scriptExec(
+		fake.ScriptedCall{Body: "not json"},
+		fake.ScriptedCall{TransportError: domain.ErrTransport, Message: "transport on repair"},
 	))
 	out, _ := execRole(t, fake)
 
@@ -239,9 +240,9 @@ func TestExecuteNoThirdCall(t *testing.T) {
 	// All permutations above enforce 2-call max.  This test is an explicit
 	// belt-and-suspenders check: the FakeProvider itself panics if a scripted
 	// call index is exhausted with ErrProviderRejected (not a 3rd call).
-	fake := provider.NewFakeProvider(scriptExec(
-		provider.ScriptedCall{TransportError: domain.ErrTransport},
-		provider.ScriptedCall{Body: "bad json"},
+	fake := fake.NewFakeProvider(scriptExec(
+		fake.ScriptedCall{TransportError: domain.ErrTransport},
+		fake.ScriptedCall{Body: "bad json"},
 	))
 	out, _ := execRole(t, fake)
 
@@ -306,7 +307,7 @@ func TestExecutePerAttemptTimeoutCancelsBlockedProvider(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteHardDeadlinePreventsCallFromStarting(t *testing.T) {
-	fake := provider.NewFakeProvider(scriptExec(provider.ScriptedCall{Body: validBody()}))
+	fake := fake.NewFakeProvider(scriptExec(fake.ScriptedCall{Body: validBody()}))
 	cfg := baseConfig(t, fake)
 	cfg.HardDeadlineAt = time.Now().Add(-time.Hour) // already expired
 
@@ -338,9 +339,9 @@ func TestExecuteCancellationDuringBackoffPreventsSecondCall(t *testing.T) {
 		return c.Err()
 	}
 
-	fake := provider.NewFakeProvider(scriptExec(
-		provider.ScriptedCall{TransportError: domain.ErrTransport, Message: "net reset"},
-		provider.ScriptedCall{Body: validBody()},
+	fake := fake.NewFakeProvider(scriptExec(
+		fake.ScriptedCall{TransportError: domain.ErrTransport, Message: "net reset"},
+		fake.ScriptedCall{Body: validBody()},
 	))
 	cfg := baseConfig(t, fake)
 	cfg.BackoffMin = 1 * time.Millisecond
@@ -368,9 +369,9 @@ func TestExecuteCancellationDuringBackoffPreventsSecondCall(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteMalformedOutputNeverBecomesAFinding(t *testing.T) {
-	fake := provider.NewFakeProvider(scriptExec(
-		provider.ScriptedCall{Body: `{"findings":[{"id":"X","severity":"critical","category":"c","issue":"i","recommendation":"r","basis_refs":["R-999-DOES-NOT-EXIST"]}]}`},
-		provider.ScriptedCall{Body: `{"findings":[{"id":"X","severity":"critical","category":"c","issue":"i","recommendation":"r","basis_refs":["R-999-DOES-NOT-EXIST"]}]}`},
+	fake := fake.NewFakeProvider(scriptExec(
+		fake.ScriptedCall{Body: `{"findings":[{"id":"X","severity":"critical","category":"c","issue":"i","recommendation":"r","basis_refs":["R-999-DOES-NOT-EXIST"]}]}`},
+		fake.ScriptedCall{Body: `{"findings":[{"id":"X","severity":"critical","category":"c","issue":"i","recommendation":"r","basis_refs":["R-999-DOES-NOT-EXIST"]}]}`},
 	))
 	out, _ := execRole(t, fake)
 
@@ -394,7 +395,7 @@ func TestExecuteForbiddenScopeIsAbsent(t *testing.T) {
 	// Execute returns a clean RoleOutcome with no side effects beyond the
 	// provider call.  This test verifies it does not require or return any
 	// storage, publication, or composer artefact.
-	fake := provider.NewFakeProvider(scriptExec(provider.ScriptedCall{Body: validBody()}))
+	fake := fake.NewFakeProvider(scriptExec(fake.ScriptedCall{Body: validBody()}))
 	cfg := baseConfig(t, fake)
 
 	out, err := Execute(context.Background(), cfg)
@@ -431,8 +432,8 @@ func TestExecuteConcurrentRolesIndependentContexts(t *testing.T) {
 	for _, role := range domain.Roles {
 		role := role
 		go func() {
-			fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
-				role: {provider.ScriptedCall{Body: validBody()}},
+			fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
+				role: {fake.ScriptedCall{Body: validBody()}},
 			})
 			cfg := ExecuteConfig{
 				Role:           role,
@@ -475,7 +476,7 @@ func TestExecuteConcurrentRolesIndependentContexts(t *testing.T) {
 
 func TestExecuteRejectsInvalidRole(t *testing.T) {
 	snap := testSnap(t)
-	fake := provider.NewFakeProvider(nil)
+	fake := fake.NewFakeProvider(nil)
 	cfg := ExecuteConfig{
 		Role:           domain.Role("not-a-role"),
 		Snapshot:       snap,
@@ -490,7 +491,7 @@ func TestExecuteRejectsInvalidRole(t *testing.T) {
 }
 
 func TestExecuteRejectsEmptySnapshot(t *testing.T) {
-	fake := provider.NewFakeProvider(nil)
+	fake := fake.NewFakeProvider(nil)
 	cfg := ExecuteConfig{
 		Role:           domain.RoleRequirements,
 		Snapshot:       evidence.Snapshot{}, // no units
@@ -521,7 +522,7 @@ func TestExecuteRejectsNilProvider(t *testing.T) {
 
 func TestExecuteRejectsZeroCallTimeout(t *testing.T) {
 	snap := testSnap(t)
-	fake := provider.NewFakeProvider(nil)
+	fake := fake.NewFakeProvider(nil)
 	cfg := ExecuteConfig{
 		Role:           domain.RoleRequirements,
 		Snapshot:       snap,
@@ -537,7 +538,7 @@ func TestExecuteRejectsZeroCallTimeout(t *testing.T) {
 
 func TestExecuteRejectsZeroHardDeadline(t *testing.T) {
 	snap := testSnap(t)
-	fake := provider.NewFakeProvider(nil)
+	fake := fake.NewFakeProvider(nil)
 	cfg := ExecuteConfig{
 		Role:        domain.RoleRequirements,
 		Snapshot:    snap,

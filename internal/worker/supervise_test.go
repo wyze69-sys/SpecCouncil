@@ -11,7 +11,7 @@ import (
 
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
 	"github.com/wyze69-sys/SpecCouncil/internal/evidence"
-	"github.com/wyze69-sys/SpecCouncil/internal/provider"
+	"github.com/wyze69-sys/SpecCouncil/internal/provider/fake"
 	"github.com/wyze69-sys/SpecCouncil/internal/review"
 	"github.com/wyze69-sys/SpecCouncil/internal/storage/sqlite"
 	"github.com/wyze69-sys/SpecCouncil/internal/worker"
@@ -74,13 +74,13 @@ func submitAndClaimSession(
 	return claimRes, snap
 }
 
-func successScript(findings ...string) provider.ScriptedCall {
+func successScript(findings ...string) fake.ScriptedCall {
 	if len(findings) == 0 {
-		return provider.ScriptedCall{
+		return fake.ScriptedCall{
 			Body: `{"findings":[{"id":"F-1","severity":"high","category":"correctness","issue":"Unvalidated state","recommendation":"Validate state","basis_refs":["unit_1"]}]}`,
 		}
 	}
-	return provider.ScriptedCall{
+	return fake.ScriptedCall{
 		Body: findings[0],
 	}
 }
@@ -116,7 +116,7 @@ func TestSupervise_ClaimedReviewingSessionExecutesAndPublishesAtomically(t *test
 	policy := standardTimingPolicy()
 	claimRes, snap := submitAndClaimSession(t, store, "sess_single_role", "proj_test", policy)
 
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -193,7 +193,7 @@ func TestSupervise_FailedRolePublishesFailureMetadataWithNoFindings(t *testing.T
 	claimRes, snap := submitAndClaimSession(t, store, "sess_failed_role", "proj_test", policy)
 
 	// Requirements fails fatally; others succeed
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {{
 			TransportError: domain.ErrProviderRejected,
 			Message:        "quota exceeded or unauthorized",
@@ -280,7 +280,7 @@ func TestSupervise_TimedOutRolePublishesTimeoutMetadataWithRealCallCount(t *test
 	claimRes, snap := submitAndClaimSession(t, store, "sess_timeout_role", "proj_test", policy)
 
 	// Call 1 times out (retryable), Call 2 also times out
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {
 			{TransportError: domain.ErrTimeout, Message: "gateway timeout"},
 			{TransportError: domain.ErrTimeout, Message: "gateway timeout 2"},
@@ -353,7 +353,7 @@ func TestSupervise_CancellationInterruptsPendingRolesAndDrainsInFlight(t *testin
 	inFlightBarrier := make(chan struct{})
 	cancelRequested := make(chan struct{})
 
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -442,7 +442,7 @@ func TestSupervise_CancellationCutoffHardDeadlinePreventLaterReservations(t *tes
 	}
 
 	var callCount atomic.Int32
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -511,7 +511,7 @@ func TestSupervise_ExactlyOnePublicationCallPerReservation(t *testing.T) {
 	claimRes, snap := submitAndClaimSession(t, store, "sess_one_pub_per_res", "proj_test", policy)
 
 	var pubCalls atomic.Int32
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -580,7 +580,7 @@ func TestSupervise_PublicationHappensAfterExecutionAndBeforeNotification(t *test
 		events = append(events, event{name: name, role: role, t: time.Now()})
 	}
 
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -658,7 +658,7 @@ func TestSupervise_NotificationFailureCannotRollbackCommittedPublication(t *test
 	policy := standardTimingPolicy()
 	claimRes, snap := submitAndClaimSession(t, store, "sess_no_rollback", "proj_test", policy)
 
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -716,7 +716,7 @@ func TestSupervise_StalePublicationConflictMakesNoSecondCall(t *testing.T) {
 	claimRes, snap := submitAndClaimSession(t, store, "sess_pub_conflict", "proj_test", policy)
 
 	var providerCalls atomic.Int32
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -784,7 +784,7 @@ func TestSupervise_TwoConcurrentlyReservedRolesNeverExceedLimit(t *testing.T) {
 	var currentInFlight atomic.Int32
 	var maxObservedInFlight atomic.Int32
 
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -851,7 +851,7 @@ func TestSupervise_FourTerminalRolesTriggerOneComposition(t *testing.T) {
 	claimRes, snap := submitAndClaimSession(t, store, "sess_comp_once", "proj_test", policy)
 
 	var compCount atomic.Int32
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -924,7 +924,7 @@ func TestSupervise_DuplicateCompositionIdempotent(t *testing.T) {
 	policy := standardTimingPolicy()
 	claimRes, snap := submitAndClaimSession(t, store, "sess_dup_comp", "proj_test", policy)
 
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -984,7 +984,7 @@ func TestSupervise_PersistenceFailureStopsDispatch(t *testing.T) {
 	injectedErr := errors.New("simulated disk I/O persistence failure")
 	var providerCalls atomic.Int32
 
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -1054,7 +1054,7 @@ func TestSupervise_ProcessLockCleanupAcrossAllExitConditions(t *testing.T) {
 	policy := standardTimingPolicy()
 	lockPath := filepath.Join(tmpDir, "worker_supervise.lock")
 
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -1229,7 +1229,7 @@ func TestSupervise_NoForbiddenOperationsOrSecondClaim(t *testing.T) {
 	// Also submit a second queued session
 	submitSession(t, store, "sess_queued_second", "proj_test", "key_queued_2", time.Now().UTC())
 
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
@@ -1286,7 +1286,7 @@ func TestSupervise_ConcurrentCompletionNotificationsSerialized(t *testing.T) {
 	policy := standardTimingPolicy()
 	claimRes, snap := submitAndClaimSession(t, store, "sess_concurrent_notif", "proj_test", policy)
 
-	fake := provider.NewFakeProvider(map[domain.Role][]provider.ScriptedCall{
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
 		domain.RoleRequirements: {successScript()},
 		domain.RoleArchitecture: {successScript()},
 		domain.RoleQA:           {successScript()},
