@@ -54,7 +54,7 @@ W2 restart recovery + single-session claim loop COMPLETE (236ad36)
 W3 serialized guarded dispatch loop COMPLETE (150303f)
  |
  v
-W4 role execution deadlines and provider-attempt budget READY
+W4 role execution deadlines and provider-attempt budget COMPLETE
  |
  v
 W5 publication/composition integration and supervisor boundary

@@ -2,9 +2,12 @@ package review
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
+	"github.com/wyze69-sys/SpecCouncil/internal/evidence"
 	"github.com/wyze69-sys/SpecCouncil/internal/provider"
 )
 
@@ -213,4 +216,268 @@ func indexOf(haystack, needle string) int {
 		}
 	}
 	return -1
+}
+
+// ---------------------------------------------------------------------------
+// Timing / deadline tests added for W4.
+// ---------------------------------------------------------------------------
+
+// makeTestSnap is a convenience builder for timing tests.
+func makeTestSnap(t *testing.T) evidence.Snapshot {
+	t.Helper()
+	return testSnapshot(t)
+}
+
+// runWithTiming is a helper that calls RunRole with a CallTiming value.
+func runWithTiming(
+	t *testing.T,
+	s map[domain.Role][]provider.ScriptedCall,
+	budget Budget,
+	timing CallTiming,
+) (RoleOutcome, *provider.FakeProvider) {
+	t.Helper()
+	fake := provider.NewFakeProvider(s)
+	out := RunRole(context.Background(), fake, domain.RoleRequirements,
+		testSnapshot(t), budget, DefaultPolicy(), timing)
+	return out, fake
+}
+
+// TestRunRoleHardDeadlinePreventsCall verifies that a hard deadline already in
+// the past blocks every provider call and returns failed/timeout.
+func TestRunRoleHardDeadlinePreventsCall(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	timing := CallTiming{
+		HardDeadlineAt: past,
+		Now:            time.Now,
+	}
+	out, fake := runWithTiming(t,
+		script(provider.ScriptedCall{Body: validBody()}),
+		Budget{}, timing)
+
+	if out.Status != domain.RoleFailed {
+		t.Fatalf("status = %s, want failed", out.Status)
+	}
+	if out.ErrorCategory != domain.ErrTimeout {
+		t.Errorf("category = %s, want timeout", out.ErrorCategory)
+	}
+	if fake.CallCount(domain.RoleRequirements) != 0 {
+		t.Errorf("calls = %d, want 0: hard deadline must prevent all calls",
+			fake.CallCount(domain.RoleRequirements))
+	}
+}
+
+// TestRunRolePerAttemptTimeoutCancelsProvider verifies that a provider that
+// blocks is cancelled by the per-attempt deadline context and RunRole returns
+// without leaking the blocked goroutine.
+func TestRunRolePerAttemptTimeoutCancelsProvider(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{}, 1)
+	blocking := &blockingProvider{
+		started:   started,
+		cancelled: cancelled,
+	}
+
+	const callTimeout = 30 * time.Millisecond
+	timing := CallTiming{
+		CallTimeout: callTimeout,
+		Now:         time.Now,
+	}
+
+	snap := makeTestSnap(t)
+	done := make(chan RoleOutcome, 1)
+	go func() {
+		out := RunRole(context.Background(), blocking,
+			domain.RoleRequirements, snap, Budget{}, DefaultPolicy(), timing)
+		done <- out
+	}()
+
+	// Wait for provider to start.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider call did not start within timeout")
+	}
+
+	// Per-attempt deadline should cancel the call.
+	select {
+	case out := <-done:
+		if out.Status != domain.RoleFailed {
+			t.Fatalf("status = %s, want failed", out.Status)
+		}
+		if !out.ErrorCategory.IsRetryableTransport() {
+			t.Errorf("category = %s, want retryable transport (timeout)", out.ErrorCategory)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunRole did not return after per-attempt deadline")
+	}
+
+	// Provider must have seen its context cancelled (no goroutine leak).
+	select {
+	case <-cancelled:
+	case <-time.After(500 * time.Millisecond):
+		t.Error("blocking provider did not observe context cancellation")
+	}
+}
+
+// TestRunRoleBackoffCancelledPreventsSecondCall verifies that cancelling
+// during backoff stops the second provider call.
+func TestRunRoleBackoffCancelledPreventsSecondCall(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Sleep that immediately cancels the context and signals cancellation.
+	cancelOnSleep := func(c context.Context, d time.Duration) error {
+		cancel()
+		return c.Err()
+	}
+
+	timing := CallTiming{
+		BackoffMin: 1 * time.Millisecond,
+		BackoffMax: 10 * time.Millisecond,
+		Now:        time.Now,
+		Sleep:      cancelOnSleep,
+	}
+
+	fake := provider.NewFakeProvider(script(
+		provider.ScriptedCall{TransportError: domain.ErrTransport, Message: "network reset"},
+		provider.ScriptedCall{Body: validBody()},
+	))
+
+	snap := makeTestSnap(t)
+	out := RunRole(ctx, fake, domain.RoleRequirements, snap, Budget{}, DefaultPolicy(), timing)
+
+	if out.Status != domain.RoleFailed {
+		t.Fatalf("status = %s, want failed", out.Status)
+	}
+	if out.ErrorCategory != domain.ErrTimeout {
+		t.Errorf("category = %s, want timeout (backoff cancelled)", out.ErrorCategory)
+	}
+	if fake.CallCount(domain.RoleRequirements) != 1 {
+		t.Errorf("calls = %d, want 1: second call must not start when backoff is cancelled",
+			fake.CallCount(domain.RoleRequirements))
+	}
+}
+
+// TestRunRoleHardDeadlinePreventsSecondCallAfterRetry verifies that the hard
+// deadline crossed during backoff prevents the transport retry second call.
+func TestRunRoleHardDeadlinePreventsSecondCallAfterRetry(t *testing.T) {
+	var mu sync.Mutex
+	baseNow := time.Now()
+	futureDeadline := baseNow.Add(50 * time.Millisecond)
+	now := baseNow
+
+	// Sleep that advances the fake clock past the deadline.
+	advancePastDeadline := func(c context.Context, d time.Duration) error {
+		mu.Lock()
+		now = futureDeadline.Add(time.Millisecond)
+		mu.Unlock()
+		return nil // sleep "succeeds" but deadline was crossed
+	}
+
+	timing := CallTiming{
+		HardDeadlineAt: futureDeadline,
+		BackoffMin:     1 * time.Millisecond,
+		BackoffMax:     10 * time.Millisecond,
+		Now: func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			return now
+		},
+		Sleep: advancePastDeadline,
+	}
+
+	fake := provider.NewFakeProvider(script(
+		provider.ScriptedCall{TransportError: domain.ErrTransport, Message: "transient"},
+		provider.ScriptedCall{Body: validBody()},
+	))
+
+	snap := makeTestSnap(t)
+	out := RunRole(context.Background(), fake, domain.RoleRequirements, snap, Budget{}, DefaultPolicy(), timing)
+
+	if out.Status != domain.RoleFailed {
+		t.Fatalf("status = %s, want failed", out.Status)
+	}
+	if fake.CallCount(domain.RoleRequirements) != 1 {
+		t.Errorf("calls = %d, want 1: hard deadline past means no second call",
+			fake.CallCount(domain.RoleRequirements))
+	}
+}
+
+// TestRunRoleHardDeadlinePreventsFormatRepairSecondCall verifies the hard
+// deadline also prevents a format repair second call from starting.
+func TestRunRoleHardDeadlinePreventsFormatRepairSecondCall(t *testing.T) {
+	var mu sync.Mutex
+	baseNow := time.Now()
+	deadline := baseNow.Add(50 * time.Millisecond)
+	now := baseNow
+
+	badThenGood := &interceptProvider{
+		inner: provider.NewFakeProvider(script(
+			provider.ScriptedCall{Body: "not json"},
+			provider.ScriptedCall{Body: validBody()},
+		)),
+		afterCall: func() {
+			// Advance clock past deadline after call 1.
+			mu.Lock()
+			now = deadline.Add(time.Millisecond)
+			mu.Unlock()
+		},
+	}
+
+	timing := CallTiming{
+		HardDeadlineAt: deadline,
+		Now: func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			return now
+		},
+	}
+
+	snap := makeTestSnap(t)
+	out := RunRole(context.Background(), badThenGood, domain.RoleRequirements, snap, Budget{}, DefaultPolicy(), timing)
+
+	if out.Status != domain.RoleFailed {
+		t.Fatalf("status = %s, want failed", out.Status)
+	}
+	if out.ErrorCategory != domain.ErrTimeout {
+		t.Errorf("category = %s, want timeout", out.ErrorCategory)
+	}
+	if badThenGood.inner.CallCount(domain.RoleRequirements) != 1 {
+		t.Errorf("calls = %d, want 1: hard deadline prevents format repair",
+			badThenGood.inner.CallCount(domain.RoleRequirements))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test doubles for timing tests.
+// ---------------------------------------------------------------------------
+
+// blockingProvider blocks until its context is cancelled.
+type blockingProvider struct {
+	started   chan struct{}
+	cancelled chan struct{}
+	once      sync.Once
+}
+
+func (b *blockingProvider) Call(ctx context.Context, req provider.Request) (provider.Response, error) {
+	b.once.Do(func() { close(b.started) })
+	<-ctx.Done()
+	select {
+	case b.cancelled <- struct{}{}:
+	default:
+	}
+	return provider.Response{}, provider.NewError(domain.ErrTimeout, "context cancelled: %v", ctx.Err())
+}
+
+// interceptProvider wraps an inner FakeProvider and calls afterCall after each Call.
+type interceptProvider struct {
+	inner     *provider.FakeProvider
+	afterCall func()
+}
+
+func (ip *interceptProvider) Call(ctx context.Context, req provider.Request) (provider.Response, error) {
+	resp, err := ip.inner.Call(ctx, req)
+	if ip.afterCall != nil {
+		ip.afterCall()
+	}
+	return resp, err
 }

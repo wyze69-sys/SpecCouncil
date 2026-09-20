@@ -309,10 +309,23 @@ Package `internal/worker` provides the verified serialized guarded dispatch loop
 - `Persistence package isolation`: communicates with storage via generic interfaces `RoleReservationStore` and `SessionStatusReader` satisfied by `*sqlite.Store` without `internal/worker` importing persistence packages.
 - `Strict worker phase scope`: strictly reserves pending roles without invoking providers, composing reports, publishing success or failure, or mutating session records outside authoritative dispatch reservation.
 
+### Worker deadline-bounded role execution
+
+Package `internal/worker` and `internal/review` provide the verified deadline-bounded role execution seam via `worker.Execute` and `review.RunRole`:
+
+- `Validated input configuration`: validates canonical role identity, non-empty frozen snapshot, non-nil provider, positive per-attempt `CallTimeout`, and non-zero `HardDeadlineAt`. Rejects empty snapshots, invalid roles, and missing inputs fail-closed.
+- `Prompt token budget`: evaluates token budget before the first provider attempt. If budget is exceeded, returns `failed` with category `budget_exhausted` making zero provider calls.
+- `Hard deadline guard`: checks whether the hard deadline has already elapsed before initiating any provider attempt. If expired, returns `failed` with category `timeout` making zero provider calls.
+- `Per-attempt deadline context`: bounds each provider attempt context to `min(now + CallTimeout, HardDeadlineAt)`. Context cancellation cleans up blocked provider calls promptly without leaking goroutines.
+- `Canonical two-call budget`: enforces a maximum of two provider calls per role execution with strict XOR semantics between transport retry and format repair (`initial -> transport_retry` XOR `initial -> format_repair`). No execution path permits a third call.
+- `Retry and backoff semantics`: only typed retryable transport failures permit a transport retry attempt; fatal provider errors fail immediately with zero retry. Backoff between attempts is bounded by configured minimum and maximum limits, and aborts immediately upon context cancellation or hard deadline expiry.
+- `Strict validation preservation`: validates provider output strictly against schema and evidence references in the immutable frozen snapshot; malformed provider output never becomes a finding.
+- `Strict worker phase isolation`: strictly executes role provider attempts and returns terminal `review.RoleOutcome` without touching SQLite transactions, publication, report composition, dispatch loops, or secondary roles.
+
 ## Not built yet
 
-API endpoints, authentication and authorization, provider call execution,
-the real provider adapter, and supervised worker process orchestration.
+API endpoints, authentication and authorization, the real provider adapter,
+publication and composition integration, and supervised worker process orchestration.
 
 ## Known implementation gaps against the canonical flow
 
