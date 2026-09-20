@@ -51,7 +51,7 @@ W1 exclusive process ownership + crash-safe lock COMPLETE (8798053)
 W2 restart recovery + single-session claim loop COMPLETE (236ad36)
  |
  v
-W3 serialized guarded dispatch loop COMPLETE
+W3 serialized guarded dispatch loop COMPLETE (150303f)
  |
  v
 W4 role execution deadlines and provider-attempt budget READY
