@@ -17,11 +17,7 @@ import (
 	"github.com/wyze69-sys/SpecCouncil/internal/storage/sqlite/migrations"
 )
 
-const (
-	migrationMetadataTable = "schema_migrations"
-	// Timestamp representation is UTC in RFC3339Nano format with 'Z' suffix (e.g. 2026-09-19T12:00:00.123456789Z).
-	timestampFormat = time.RFC3339Nano
-)
+const migrationMetadataTable = "schema_migrations"
 
 var (
 	migrationFilenameRegex = regexp.MustCompile(`^([0-9]{3})_([a-z][a-z0-9_]*)\.sql$`)
@@ -170,7 +166,7 @@ func applyMigration(ctx context.Context, db *sql.DB, m Migration) error {
 		return fmt.Errorf("context cancelled before metadata insert %03d (%s): %w", m.Version, m.Name, err)
 	}
 
-	appliedAt := clock().UTC().Format(timestampFormat)
+	appliedAt := formatUTCTimestamp(clock())
 	if beforeMetadataInsertHook != nil {
 		if err := beforeMetadataInsertHook(ctx, tx, m, appliedAt); err != nil {
 			return fmt.Errorf("record migration metadata %03d (%s): %w", m.Version, m.Name, sanitizeErr(err, ""))

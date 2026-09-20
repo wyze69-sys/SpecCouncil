@@ -178,8 +178,8 @@ func TestE2E_01_FreshSubmit(t *testing.T) {
 	if normVer != 1 {
 		t.Errorf("normalization_version = %d, want 1", normVer)
 	}
-	if snapCreated != "2026-09-19T12:00:00Z" {
-		t.Errorf("snap created_at = %q, want 2026-09-19T12:00:00Z", snapCreated)
+	if snapCreated != "2026-09-19T12:00:00.000000000Z" {
+		t.Errorf("snap created_at = %q, want 2026-09-19T12:00:00.000000000Z", snapCreated)
 	}
 
 	// 2. Ordered evidence units: exactly matches frozen snapshot
@@ -368,14 +368,14 @@ func TestE2E_02_FIFOClaim(t *testing.T) {
 	if status != "reviewing" {
 		t.Errorf("status = %q, want reviewing", status)
 	}
-	if claimedAt != "2026-09-19T12:05:00Z" {
-		t.Errorf("claimed_at = %q, want 2026-09-19T12:05:00Z", claimedAt)
+	if claimedAt != "2026-09-19T12:05:00.000000000Z" {
+		t.Errorf("claimed_at = %q, want 2026-09-19T12:05:00.000000000Z", claimedAt)
 	}
-	if cutoffAt != "2026-09-19T12:20:00Z" {
-		t.Errorf("dispatch_cutoff_at = %q, want 2026-09-19T12:20:00Z", cutoffAt)
+	if cutoffAt != "2026-09-19T12:20:00.000000000Z" {
+		t.Errorf("dispatch_cutoff_at = %q, want 2026-09-19T12:20:00.000000000Z", cutoffAt)
 	}
-	if deadlineAt != "2026-09-19T12:30:00Z" {
-		t.Errorf("hard_deadline_at = %q, want 2026-09-19T12:30:00Z", deadlineAt)
+	if deadlineAt != "2026-09-19T12:30:00.000000000Z" {
+		t.Errorf("hard_deadline_at = %q, want 2026-09-19T12:30:00.000000000Z", deadlineAt)
 	}
 
 	// 3. Late session remains queued
@@ -576,7 +576,7 @@ func TestE2E_04_SuccessfulPublication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query role_runs: %v", err)
 	}
-	if status != "complete" || callCount != 1 || completedAt != "2026-09-19T12:03:00Z" {
+	if status != "complete" || callCount != 1 || completedAt != "2026-09-19T12:03:00.000000000Z" {
 		t.Errorf("role_run not complete: status=%s call=%d completed_at=%s", status, callCount, completedAt)
 	}
 
@@ -708,7 +708,7 @@ func TestE2E_05_FailedPublication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query role_runs: %v", err)
 	}
-	if status != "failed" || errCat != "transport" || errMsg != "model gateway 502 bad gateway" || callCount != 2 || compAt != "2026-09-19T12:02:00Z" {
+	if status != "failed" || errCat != "transport" || errMsg != "model gateway 502 bad gateway" || callCount != 2 || compAt != "2026-09-19T12:02:00.000000000Z" {
 		t.Errorf("role run failure fields incorrect: status=%s cat=%s msg=%s call=%d comp=%s", status, errCat, errMsg, callCount, compAt)
 	}
 

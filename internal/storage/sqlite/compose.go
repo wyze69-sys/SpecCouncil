@@ -535,7 +535,7 @@ func (s *Store) ComposeSessionWithParams(ctx context.Context, params ComposePara
 		if claimedAt != nil && now.Before(*claimedAt) {
 			now = *claimedAt
 		}
-		terminalAtStr := now.Format(time.RFC3339Nano)
+		terminalAtStr := formatUTCTimestamp(now)
 
 		// 8. Execute compare-and-set UPDATE requiring session to remain 'reviewing'.
 		updateSQL := `UPDATE sessions

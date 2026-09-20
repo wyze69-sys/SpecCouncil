@@ -116,7 +116,7 @@ Package `internal/storage/sqlite` provides the embedded, ordered, checksummed SQ
 
 - Manifest validation enforcing `^[0-9]{3}_[a-z][a-z0-9_]*\.sql$` filenames, decimal versions 001–999, non-empty SQL bytes, and rejecting malformed names, version 000, duplicate versions, and non-empty subdirectories.
 - SHA-256 checksums computed over exact embedded SQL bytes.
-- Atomic execution of each migration's SQL and metadata recording (`schema_migrations` tracking table with numeric version, exact name, checksum, and UTC applied time in RFC3339Nano format).
+- Atomic execution of each migration's SQL and metadata recording (`schema_migrations` tracking table with numeric version, exact name, checksum, and UTC applied time in fixed-width RFC3339-compatible format with exactly nine fractional digits).
 - Fail-closed verification comparing existing metadata rows against the manifest on every run; rejecting missing applied versions, name mismatches, or checksum mismatches.
 - Idempotent reopen without modifying applied timestamps or re-running applied migrations.
 - Context cancellation respected before and during migration execution.
@@ -176,7 +176,7 @@ Package `internal/storage/sqlite` provides verified read-only status and termina
 - `Persisted field preservation`: `cancel_requested`, `status`, `terminal_reason`, `completed_role_count`, and `incomplete_role_count` are returned exactly as committed in storage without verdict composition or re-derivation from live flags.
 - `Filtered role findings`: failed and interrupted roles contribute zero findings to terminal reports.
 - `Snapshot hash integrity`: `ReadSnapshot` reconstructs ordered evidence units, recomputes canonical hash via `evidence.Freeze`, and fails closed with `ErrSnapshotCorrupted` on mismatch.
-- `Strict UTC timestamp and enum decoding`: all persisted timestamps require UTC RFC3339Nano representation ending in 'Z' with length >= 20; malformed timestamps, enums, or count combinations return typed errors without silent fallback.
+- `Strict UTC timestamp and enum decoding`: persisted timestamps are written in fixed-width RFC3339-compatible UTC representation with exactly nine fractional digits and a `Z` suffix; existing whole-second and nanosecond RFC3339 timestamps remain readable; malformed timestamps, enums, or count combinations return typed errors without silent fallback.
 
 ### SQLite FIFO session claim and timing policy
 

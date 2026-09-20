@@ -222,7 +222,7 @@ func (s *Store) Submit(ctx context.Context, params SubmitParams) (*SubmitResult,
 		} else {
 			createdAt = createdAt.UTC()
 		}
-		createdAtStr := createdAt.Format(time.RFC3339Nano)
+		createdAtStr := formatUTCTimestamp(createdAt)
 
 		// 3. Atomically persist snapshot if not already present.
 		var existingSnapHash string

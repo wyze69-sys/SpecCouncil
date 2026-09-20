@@ -264,7 +264,7 @@ func (s *Store) ClaimSessionWithNow(ctx context.Context, policy TimingPolicy, cl
 		}
 		if createdAt.After(now) {
 			return fmt.Errorf("%w: session %q created_at %s is after claim time %s",
-				ErrMalformedData, targetID, createdAtStr, now.Format(time.RFC3339Nano))
+				ErrMalformedData, targetID, createdAtStr, formatUTCTimestamp(now))
 		}
 
 		// Verify that all canonical role runs exist and are in pending status.
@@ -363,5 +363,5 @@ func (s *Store) ClaimSessionWithNow(ctx context.Context, policy TimingPolicy, cl
 }
 
 func formatUTCTimestamp(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+	return t.UTC().Format("2006-01-02T15:04:05.000000000Z")
 }
