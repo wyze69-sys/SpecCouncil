@@ -144,18 +144,55 @@ this exact order, is:
 
 5. **Paragraph.** Any other non-blank line contributes to the current
    `BlockParagraph`. Consecutive non-blank, otherwise-unclassified lines are
-   joined into one paragraph block with single `\n` separators. A blank line (a
-   line that is empty after trimming) terminates the current paragraph. Leading
-   and trailing whitespace of the joined paragraph text is trimmed; interior
-   single `\n` line joins are preserved.
+   joined into one paragraph block with single `\n` separators. Leading and
+   trailing whitespace of the joined paragraph text is trimmed; interior single
+   `\n` line joins are preserved.
 
-Blank lines never produce a block. `Order` is assigned as a strict 0-based
-counter in document order across all emitted blocks of every kind. Empty input
-(`""` or whitespace/blank-only) returns a non-nil empty slice `[]Block{}`.
+### Paragraph flushing (mandatory)
 
-Every emitted block must have non-empty `Text` after its normalization rule; if
-a rule would yield empty text (e.g. a heading line `###` with no text, or a list
-marker with no content), emit nothing for that line rather than an empty block.
+A pending paragraph is flushed (emitted as one block, if it has non-empty text)
+BEFORE any of these events, with no blank line required between them:
+
+- a blank line;
+- a heading line (rule 2);
+- a table row (rule 3);
+- a list item (rule 4);
+- an opening code fence (rule 1);
+- end of input.
+
+Concretely, this input produces a paragraph block THEN a heading block, in that
+order, even though no blank line separates them:
+
+```text
+some text
+# Heading
+```
+
+A structural line never merges into a paragraph, and paragraph text never
+absorbs a following structural line.
+
+### Whitespace, edge, and boundary rules (pin these exactly)
+
+- "Trimmed" and "blank" always mean Go `strings.TrimSpace` semantics (spaces,
+  tabs, and other Unicode whitespace), applied consistently for both
+  classification and emitted text.
+- Heading: a run of exactly 1–6 leading `#` followed by at least one space is a
+  heading. A run of 7 or more `#` is NOT a heading; treat the line as paragraph
+  text. `#` with no following space is NOT a heading (paragraph text).
+- Code fence: an opening fence is a trimmed line whose first three characters are
+  ` ``` `. Any trailing text on the opening fence line (an info string such as
+  ` ```go `) is discarded and is not part of the block text. A closing fence is
+  the next trimmed line whose first three characters are ` ``` `. Fences longer
+  than three backticks are treated the same as a three-backtick fence in this
+  slice (first-three-chars test); nested fences are not supported.
+- Blank lines never produce a block. `Order` is a strict gap-free 0-based counter
+  in document order across all emitted blocks of every kind.
+- Empty input (`""`) or input that is entirely blank/whitespace returns a
+  non-nil empty slice `[]Block{}`.
+- Every emitted block must have non-empty `Text` after its normalization rule. If
+  a rule would yield empty text (a heading `###` with no text, a list marker with
+  no content, a fenced code block whose interior is empty), emit nothing for that
+  construct rather than an empty block.
 
 ## Tests and gate
 
@@ -171,6 +208,13 @@ Write table-driven tests in `internal/ingest/parser_test.go` (package
 - unordered list markers `-`, `*`, `+` and ordered markers `1.`, `2)`;
 - a table with a header row, a `| --- |` separator row, and a data row = three
   `BlockTableRow` blocks in order;
+- a paragraph immediately followed (no blank line) by a heading, table row, list
+  item, and code fence each flushes the paragraph first, then emits the
+  structural block (paragraph-flush guard);
+- a `#######` (seven-hash) line and a `#`-with-no-space line are paragraph text,
+  not headings;
+- an opening fence with an info string (` ```go `) discards the info string and
+  is not part of the code block text;
 - a fenced code block preserves interior whitespace and blank lines and excludes
   the fences;
 - an unterminated fenced code block runs to EOF as one `BlockCode`;
