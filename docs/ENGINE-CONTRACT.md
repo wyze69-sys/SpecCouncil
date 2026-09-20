@@ -1,15 +1,20 @@
-# Engine Contract — milestone 1
+# SpecCouncil Engine Contract
 
-This file records what the engine implements, and marks every place where the
-specification has not frozen a decision. Unfrozen choices are isolated in one
-place in the code so that freezing the specification is a one-line change.
+This file records what the current Go engine implements, what remains blocked,
+and which M2 validation decisions are approved without changing the runtime
+contract. Unfrozen choices stay explicit rather than being inferred from future
+product ideas.
 
 ## Canonical runtime flow
 
-The approved v1 runtime authority is [`CANONICAL-FLOW.md`](CANONICAL-FLOW.md).
-It resolves the previously open cancellation, persistence-failure, request-hash,
-hard-deadline, and terminal-reason rules. This milestone contract records only
-which parts of that flow the current code implements.
+The approved current-review runtime authority is
+[`CANONICAL-FLOW.md`](CANONICAL-FLOW.md). It resolves the cancellation,
+persistence-failure, request-hash, hard-deadline, and terminal-reason rules. This
+contract records which parts of that flow the current code implements.
+
+M2 validates evidence ingestion, a real provider, comparative review quality, and
+evidence burden. Approved-baseline and change-review behavior remains a candidate
+for M3 and is not part of the implemented contract.
 
 ## Confirmed contract implemented
 
@@ -51,6 +56,18 @@ addressable.
 
 All four roles receive the same snapshot. No per-role selection.
 
+The current engine does not construct evidence units from raw proposal text.
+`evidence.Freeze` accepts units already carrying IDs, kinds, and text. The live
+HTTP submission boundary therefore has no canonical production path from request
+`content` to the non-empty frozen snapshot required by `sqlite.Submit`. M2 must
+specify deterministic ingestion before that path can be called complete.
+
+Snapshot identity is content-oriented: the hash covers evidence units sorted by
+unit ID. It does not encode project ID, title, raw content, input order, splitter
+version, approval, or parent lineage. M2 may add a splitter version to the
+construction contract, but approval and lineage remain separate candidate M3
+records rather than silently changing snapshot identity.
+
 ### Provider output pipeline
 
 ```
@@ -64,6 +81,15 @@ raw body
 Enforced bounds: at most 15 findings; 1–5 unique basis refs per finding; issue
 and recommendation non-empty and at most 1000 characters; unique finding ids.
 An empty findings list is valid.
+
+This validation proves structural conformance and citation existence only. It
+does not prove that cited text supports a finding, that a finding is correct, or
+that the review is complete. The current output also has no explicit omission
+claim type; requiring 1–5 references can pressure a provider to cite nearby text
+for something the design does not state. M2 must freeze and benchmark the
+experimental finding/citation schema before the real adapter is accepted.
+Substring-checked excerpts may be evaluated as traceability evidence, but they
+must not be described as semantic verification.
 
 ### Two-call provider budget
 
@@ -79,16 +105,16 @@ A role can never exceed two provider calls.
 
 ### Composer
 
-The current milestone composer correctly refuses to run until all four role
-outcomes are terminal and produces deterministic ordering. Its in-memory verdict
-logic aligns with the approved canonical flow:
+The in-memory composer and SQLite transactional composition refuse to run until
+all four role outcomes are terminal and produce deterministic ordering. Their
+verdict logic aligns with the approved canonical flow:
 
 - derives `terminal_reason` from committed interruption causes, not the live
   cancellation flag;
 - includes `process_restart`, `deadline_cutoff`, and `role_failures` reasons;
 - uses `incomplete_role_count` (`4 - completed_role_count`);
-- executing the gate and terminal session update transactionally will be added
-  once persistence exists.
+- transactionally verifies the terminal gate and compare-and-set updates the
+  reviewing session to its terminal status.
 
 Canonical composer behavior is defined only by `CANONICAL-FLOW.md`.
 
@@ -346,11 +372,13 @@ Package `internal/worker` provides the verified one-attempt process supervisor b
 - `No automatic restart`: does not implement a daemon loop, retry loop, or automatic process restart; restart decisions belong exclusively to the outer deployment or service manager.
 - `Outcome and error preservation`: preserves successful results, no-work results, typed sentinels (`ErrAlreadyOwned`, `context.Canceled`, `context.DeadlineExceeded`), and persistence errors without alteration.
 - `Underlying layer ownership`: process locks, restart recovery sweeps, FIFO claims, role dispatching, provider execution, publication, and composition remain exclusively owned by the released W1–W5 worker layers; W6 does not acquire secondary locks or duplicate worker operations.
-- `Deferred scope`: HTTP endpoints, authentication and authorization, real provider networking, and deployment restart policies remain later work.
+- `Deferred scope`: concrete authentication and authorization adapters, real provider networking, deployment restart policies, and automatic restart remain later work.
 
 ### HTTP API composition boundary
 
-Package `internal/api` provides the verified real `net/http` composition root and routing boundary via `NewServer` and `Server.Handler`:
+Package `internal/api` provides an implemented and independently tested
+`net/http` composition and routing boundary via `NewServer` and
+`Server.Handler`:
 
 - `Real net/http composition root and handler`: validates required dependencies (`Store`, `Authenticator`, `Authorizer`) at construction; exposes an `http.Handler` testable via `httptest` without starting a network listener.
 - `Protected route authentication and project authorization boundaries`: protected endpoints (`/v1/projects/{project_id}/reviews...`) authenticate before accessing persistence; pass authenticated `Identity` to project authorization; reject unauthenticated requests with 401.
@@ -363,21 +391,74 @@ Package `internal/api` provides the verified real `net/http` composition root an
 - `No worker or provider invocation from HTTP`: the API layer never claims work, dispatches roles, calls providers, or composes reports directly.
 - `No concrete auth/account system yet`: authentication and authorization interfaces accept injectable adapters; user accounts, passwords, JWTs, OAuth, and authorization storage are deferred.
 
+#### HTTP production-submission blocker
+
+The HTTP route contract is tested through injected store seams, but successful
+production submission through a real `*sqlite.Store` is not complete. The server
+accepts raw `content`; SQLite requires a valid non-empty frozen snapshot; and the
+optional `SnapshotProvider` may be nil, leaving `SubmitParams.Snapshot` empty and
+causing `sqlite.Submit` to reject the request with `ErrNilSnapshot`.
+
+This is a composition blocker, not evidence that routing, authorization, or HTTP
+error mapping is absent. Its repair is intentionally held until M2 freezes the
+deterministic evidence-ingestion contract. Fake-store handler tests do not prove
+this real-store path.
+
+## Approved M2 validation scope
+
+M2 is a validation milestone, not an approved-baseline implementation milestone.
+It plans five workstreams:
+
+1. Deterministic raw-content-to-evidence-unit ingestion.
+2. An experimental finding/citation contract that represents supported text,
+   conflict, and omission without claiming semantic proof.
+3. One safely configured real provider, with the fake provider retained for
+   deterministic automated tests.
+4. A normalized, blinded four-arm benchmark comparing free-form single-call,
+   structured single-call, four specialist roles, and four generic calls.
+5. Historical concierge change review followed, when participants are available,
+   by a prospective 4-6 week trial measuring voluntary meaningful resubmission.
+
+Benchmark arms use equivalent evidence, comparable declared token/cost budgets,
+and at least three runs per case. Measurements include seeded-defect recall,
+precision, citation support, important misses, duplicates/conflicts, run-to-run
+variance, cost, latency, decision impact, and evidence-preparation time. Pilot
+data establishes the distribution used to pre-register any later pass threshold.
+
+M2 does not add baseline schema, snapshot lineage, typed cross-snapshot citations,
+change-review sessions, finding continuity, human decision records, ADR export,
+agent hooks, CI gates, or drift detection. Those remain M3 candidates and require
+a separate approved canonical contract.
+
 ## Not built yet
 
-The real provider adapter, concrete auth/account persistence, and deployment
-restart policy.
+Deterministic raw-content evidence ingestion, a real provider adapter, concrete
+auth/account persistence, deployment restart policy, and every M3 candidate
+listed above.
 
-## Known implementation gaps against the canonical flow
+## Known implementation and validation gaps
 
-| Gap | Current code | Required change |
+| Gap | Current code | Required M2 decision or evidence |
 |---|---|---|
+| Raw content to snapshot | HTTP accepts `content`; SQLite requires a frozen snapshot; no canonical splitter exists | Freeze deterministic splitter v1 and complete the real HTTP-to-SQLite path |
 | Format-repair call fails in transport | Reports the transport failure | Keep this behavior; persist `transport` or `timeout` |
 | Prompt token count | Rough four-characters-per-token estimate | Use the configured model's tokenizer |
-| Finding field set | Requires `severity` and `category` | Freeze the complete output schema before the real adapter |
+| Finding field set | Requires `severity`, `category`, `issue`, `recommendation`, and 1-5 `basis_refs` | Freeze the experimental real-provider schema, including omission representation |
+| Citation grounding | Proves each `basis_ref` exists | Measure whether cited evidence actually supports the finding; do not claim semantic verification |
+| Provider quality | Fake-provider mechanics only | Run the controlled real-provider benchmark |
+| Four-role value | Four roles are implemented | Compare against structured single-call and generic multi-sample controls |
+| Return behavior | No product evidence | Use a prospective trial; historical changes cannot prove voluntary return |
 
 ## Evidence status
 
-Everything in this milestone is proven by the Go test suite through the fake
-provider. No real provider has been called, so nothing here is evidence about
-live model behaviour.
+The Go test suite establishes the implemented mechanical behavior described in
+this contract through the deterministic fake provider. It does not establish
+live-model review quality, semantic citation support, completeness, market demand,
+or four-role superiority. Provider findings are nondeterministic; validation,
+persistence, ordering, composition, and terminal-state derivation are the
+deterministic parts.
+
+SpecCouncil must not claim that a design or implementation is correct or secure,
+that code matches a design, that a release is ready, that zero findings means no
+issues, or that findings are reproducible across runs. `complete` is an execution
+status, not human approval or a quality verdict.

@@ -1,10 +1,34 @@
 # SpecCouncil v1 Canonical Flow
 
-Status: approved implementation baseline on 2026-09-19.
+Status: approved current-review runtime baseline on 2026-09-19; M2 validation direction approved on 2026-09-20.
 
-This document is the authority for the SpecCouncil v1 runtime flow. The numeric
-timing values remain measurement-driven configuration; the state transitions and
-control behavior below are frozen unless changed explicitly.
+This document is the authority for the implemented SpecCouncil v1 current-review
+runtime flow. The numeric timing values remain measurement-driven configuration;
+the state transitions and control behavior below are frozen unless changed
+explicitly.
+
+## Authority boundary
+
+The implemented canonical flow remains one frozen snapshot reviewed by the four
+canonical roles. M2 validates the evidence-ingestion and real-provider behavior
+needed to decide whether that product is useful in practice. M2 does not add an
+approved-baseline lifecycle or change-review runtime.
+
+The candidate post-design workflow is:
+
+```text
+current design review
+-> human-approved design baseline
+-> proposed complete revision
+-> cited change-impact review
+-> human Accept / Revise / Reject decision
+-> optional later approval of a complete revised baseline
+```
+
+That workflow is an experiment subject, not an approved runtime contract. Until
+the M2 validation gate passes, this document does not authorize baseline tables,
+snapshot lineage, cross-snapshot citations, change-review sessions, finding
+lifecycle inference, or baseline-advancement APIs.
 
 ## Fixed state model
 
@@ -103,6 +127,24 @@ Rules:
 
 The snapshot splitter may normalize line endings separately. That does not alter
 the request hash.
+
+### Evidence-ingestion boundary
+
+The current runtime accepts an already constructed frozen `evidence.Snapshot`.
+It does not yet define how raw proposal `content` becomes evidence units. Until
+M2 freezes that contract, snapshot construction must not invent unit IDs, kinds,
+or segmentation rules.
+
+M2 will evaluate a deterministic splitter v1 with these candidate boundaries:
+
+```text
+headings | paragraphs | list items | tables | code blocks
+```
+
+The candidate must preserve explicit author identifiers such as `REQ-12`, assign
+deterministic IDs where none exist, record its splitter version, and produce the
+same units for the same bytes and version. The exact normalization, ID, table,
+and collision rules remain unfrozen until the M2 specification is approved.
 
 ## 2. Worker claim
 
@@ -256,6 +298,15 @@ strict JSON parse; reject unknown fields
 An empty findings list is a valid successful result. Invalid output never becomes
 a finding, and missing or invalid evidence references are never invented or
 silently remapped.
+
+Validation proves that a cited unit exists in the frozen snapshot. It does not
+prove that the unit semantically supports the finding, that the finding is true,
+or that the review found every important issue. The current mandatory
+`basis_refs` shape also has no explicit representation for an omission claim.
+M2 must measure citation support and define the experimental finding/citation
+schema before a real provider result is treated as product evidence. Verbatim
+excerpts may improve traceability, but substring matching alone is not semantic
+verification.
 
 ## 5. Persist role result
 
@@ -527,6 +578,63 @@ requested. They are handled normally when claimed.
 exclusive process lock unavailable
 -> second worker exits
 ```
+
+## M2 validation gate
+
+M2 validates the current product before any approved-baseline or change-review
+runtime is frozen. It contains five workstreams:
+
+1. Specify deterministic raw-content-to-evidence-unit ingestion.
+2. Freeze the experimental finding and citation schema, including an explicit
+   omission representation, without claiming that structural validation proves
+   semantic support.
+3. Exercise one safely configured real provider while retaining the deterministic
+   fake provider for automated tests.
+4. Run a controlled four-arm benchmark:
+   - free-form single call;
+   - one structured call using the same output contract;
+   - four canonical specialist roles;
+   - four generic calls composed under the same presentation format.
+5. Run a concierge change-review experiment using real historical changes and,
+   when suitable participants exist, a prospective 4-6 week live trial.
+
+Each benchmark arm must receive equivalent source evidence, use comparable model
+quality and declared token/cost budgets, render into a normalized blinded format,
+and run at least three times per case. The pilot measures seeded-defect recall,
+precision, citation support, important misses, duplicate or conflicting findings,
+run-to-run variance, cost, latency, and evidence-preparation time. Pilot results
+set the distribution used to pre-register thresholds for any larger comparison;
+the threshold must not be moved after seeing that larger result.
+
+M2 passes only if direct real-provider evidence shows useful review quality and
+users can prepare evidence with acceptable effort. Four-role superiority is not
+assumed. If a structured single call matches the four-role path within measured
+variance, the role architecture and positioning must be reconsidered before M3.
+Historical examples cannot prove voluntary return behavior; only prospective use
+can test whether users bring back another meaningful change.
+
+M2 does not authorize these M3 candidates:
+
+```text
+approved baseline records
+baseline version lineage or active-baseline pointers
+cross-snapshot or typed baseline/proposed/diff citations
+change-review sessions or request hash v2
+human change-decision records
+finding-to-finding continuity
+ADR export, agent hooks, CI gates, or drift detection
+```
+
+Any later M3 specification must preserve these boundaries:
+
+- Review completion is not design approval.
+- Accepting a change is not approving a new baseline.
+- Provider findings remain nondeterministic.
+- Findings remain immutable occurrences; fixed, reopened, regressed, or renamed
+  relationships are not inferred automatically.
+- SpecCouncil does not claim design correctness, implementation conformance,
+  security, release readiness, complete risk discovery, or reproducible findings.
+- A human owns every Accept, Revise, Reject, and baseline-approval decision.
 
 ## Compressed flow
 
