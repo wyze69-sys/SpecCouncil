@@ -161,6 +161,7 @@ Package `internal/storage/sqlite` provides verified atomic submission and idempo
 - `Request hash v1`: deterministic SHA-256 over unambiguous length-prefixed bytes:
   `normalization_version=1\n<byte_len(project_id)>:<project_id>\n<byte_len(title)>:<title>\n<byte_len(content)>:<content>`.
   Strict UTF-8 validation rejecting invalid sequences before hashing; no trimming; no Unicode normalization; exact submitted line endings preserved.
+- `Snapshot hash verification`: recomputes canonical snapshot hash via `evidence.Freeze(snapshot.ID, snapshot.Units)` and rejects any missing, mismatched, or corrupted snapshot hash before entering transactions or evaluating idempotency replay.
 - `Atomic submission`: executed entirely within one `withImmediate` transaction. Checks `(project_id, idempotency_key)`. Absent key atomically creates the immutable snapshot, ordered evidence units, queued session (`cancel_requested = 0`, `completed_role_count = 0`, `incomplete_role_count = 4`, null timing/claim/terminal fields), and exactly the four canonical role runs in `domain.Roles` order (`requirements`, `architecture`, `qa`, `security`) in `pending` status.
 - `Idempotency replay`: matching `(project_id, idempotency_key)` with identical request hash returns the original session identity (`Replay: true`) without creating new rows.
 - `Idempotency conflict`: matching `(project_id, idempotency_key)` with mismatched request hash returns a typed `IdempotencyConflictError` matching sentinel `ErrIdempotencyConflict`.

@@ -162,6 +162,15 @@ func (s *Store) Submit(ctx context.Context, params SubmitParams) (*SubmitResult,
 		return nil, ErrNilSnapshot
 	}
 
+	frozen, err := evidence.Freeze(params.Snapshot.ID, params.Snapshot.Units)
+	if err != nil {
+		return nil, fmt.Errorf("invalid snapshot: %w", err)
+	}
+	if frozen.Hash != params.Snapshot.Hash {
+		return nil, fmt.Errorf("snapshot hash mismatch for %q: supplied %s != recomputed %s",
+			params.Snapshot.ID, params.Snapshot.Hash, frozen.Hash)
+	}
+
 	reqHash, err := RequestHashV1(params.ProjectID, params.Title, params.Content)
 	if err != nil {
 		return nil, fmt.Errorf("compute request hash: %w", err)
