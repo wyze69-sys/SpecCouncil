@@ -1,23 +1,31 @@
-# SpecCouncil Persistence Build Map for Cline
+# SpecCouncil M2 Build Map for Cline
 
 ## Purpose
 
-Build the SQLite persistence foundation in small, independently verified slices.
-Only one packet is executed per Cline invocation. This phase ends with durable,
-race-tested persistence; worker orchestration, HTTP/auth, live providers, and UI
-remain separate later phases.
+The persistence, worker, and HTTP-composition foundation is complete and
+independently verified. This map now drives **M2**, the validation milestone
+that decides whether SpecCouncil should grow beyond one-time proposal review.
+
+M2 has five items. The first three are real product capabilities. The last two
+are validation systems that test whether the product is worth expanding before
+any M3 architecture is built.
+
+Only one packet is executed per Cline invocation. Hermes independently verifies
+each result before releasing the next packet. No M3 capability is implemented in
+this milestone.
 
 ## Authority
 
 Read in this order for every slice:
 
-1. `docs/CANONICAL-FLOW.md` — runtime authority.
+1. `docs/CANONICAL-FLOW.md` — runtime authority for implemented v1 behavior.
 2. The current packet in this directory.
 3. Existing Go code and tests.
-4. `docs/ENGINE-CONTRACT.md` — implementation gaps only.
+4. `docs/ENGINE-CONTRACT.md` — implementation facts, gaps, and blockers.
 
 If code or old tests conflict with the canonical flow, the canonical flow wins.
-Workers may not edit it or silently invent a replacement rule.
+Workers may not edit it or invent a replacement rule. M2 documentation changes
+must not silently alter proven v1 runtime behavior.
 
 ## Execution protocol
 
@@ -39,39 +47,32 @@ REPORT
 STOP
 ```
 
-One packet equals one invocation. A failed slice is repaired; the next slice does
-not start. Hermes verifies every result before releasing its successor packet.
+One packet equals one invocation. A failed slice is repaired; the next slice
+does not start.
 
 ## Global rules
 
-- Repository: `D:\PROJECT\SpecCouncil`; Go 1.27.1.
+- Repository: `D:\PROJECT\SpecCouncil`; Go 1.27.1; module
+  `github.com/wyze69-sys/SpecCouncil`.
 - Use `database/sql` with pure-Go `modernc.org/sqlite`; no CGO or ORM.
-- Use embedded numbered migrations. Record and verify an SHA-256 checksum for
-  every applied migration; changed applied SQL fails closed.
-- Applied migrations are never edited. Corrections are new migrations.
-- Write-critical operations use a dedicated connection and explicit
-  `BEGIN IMMEDIATE`; do not assume `sql.Tx` is immediate. P1B migration
-  atomicity is the sole phase exception: it may use an ordinary `sql.Tx` only
-  for migration SQL plus metadata, because P1C owns the reusable immediate
-  transaction boundary.
-- The reusable immediate-transaction boundary retries only SQLite busy/locked
-  failures, at most configured `DB_RETRIES`, then returns a typed
-  persistence-unavailable error. Never retry conflicts, validation, not-found,
-  invariant, or stale-write errors.
-- Every connection enforces foreign keys and bounded busy timeout. The file DB
-  uses WAL. Report queries use a real read-only connection/pool.
-- Concurrency tests use a real file under `t.TempDir()`, not independent
-  `:memory:` connections. Synchronize races with barriers, never sleeps.
-- Use one documented UTC timestamp representation.
+- Applied migrations are **never edited**. Corrections and new tables are new
+  numbered migrations with recorded SHA-256 checksums; changed applied SQL fails
+  closed.
+- Preserve every proven guarantee unchanged: immutable snapshots and hashes,
+  strict `basis_refs` validation, at most two provider calls per role, retry XOR
+  format repair, cancellation/deadline behavior, at most two persisted roles in
+  flight, guarded dispatch, compare-and-set publication, late-result protection,
+  restart recovery, idempotent submission, deterministic composition,
+  COMPLETE/PARTIAL/FAILED terminal semantics, read-only report behavior, process
+  lock, and one-attempt worker supervisor behavior.
+- Do not weaken database constraints or move authoritative concurrency guarantees
+  from SQLite into application memory.
 - Never persist credentials, secret-bearing prompts, or raw provider errors.
-- No admission cap in v1.
-- No splitter may be invented in this phase. Persistence receives an already
-  frozen `evidence.Snapshot` plus the original title/content used for request
-  hashing. Input-to-evidence splitting belongs to a later ingestion contract.
-- No HTTP, auth implementation, live provider, worker goroutines, process lock,
-  UI, cross-review, leases, heartbeats, broker, or provider replay.
-- Do not edit `docs/CANONICAL-FLOW.md` or add progress narrative to README.
-- Do not configure a remote or push.
+  Real provider work uses server-side credentials only; no secret ever enters
+  source, packets, reports, prompts, logs, or chat.
+- The fake provider is retained for all automated tests. A real provider is
+  called only under the M2-3 safety envelope.
+- Do not add remotes or push.
 
 ## Gate after every slice
 
@@ -83,362 +84,263 @@ git diff --check
 git status --short
 ```
 
-A packet adds focused checks. Commit only when both focused and full gates pass.
+Race-sensitive slices additionally run `go test -race ./...`. Native Windows
+`-race` is blocked by CGO (`go: -race requires cgo; enable cgo by setting
+CGO_ENABLED=1`); run it in WSL Ubuntu with Go+GCC and report the actual
+environment. Never rewrite a blocked race gate as PASS.
 
-## DAG
+## Verified foundation (do not reopen without a proven defect)
+
+| Phase | Deliverable | Commit |
+|---|---|---|
+| P0 | Canonical domain alignment | `171b9d2` |
+| P1A | SQLite store open + read-only pool | `c21c240` |
+| P1B | Checksummed migration runner | `0975ad0` |
+| P1C | Immediate transaction + bounded busy retry | `71da0fe` |
+| P2 | Core schema | `9db3dab` |
+| P3 | Transition/citation/immutability guards | `975c123` |
+| P4 | Atomic submission + idempotency | `6906d85` |
+| P5 | Deterministic read models | `7c8016c` |
+| P6 | FIFO claim + timing policy | `32c6ec1` |
+| P7 | Cancellation request | `c43fdc0` |
+| P8 | Guarded dispatch | `b2218d7` |
+| P9 | Atomic role publication | `61241f4` |
+| P10 | Control sweeps + restart recovery | `7945ee6` |
+| P11 | Transactional composer + report reads | `3066996` |
+| P12 | End-to-end persistence + race gate | `7e57a05` |
+| R1–R4 | Timestamp/sweep/findings-guard/snapshot-hash repairs | released |
+| W1–W6 | Worker execution, dispatch, lock, one-attempt supervisor | through `daec080` |
+| W7 | HTTP/API composition boundary | `ec33dcb` |
+
+**Known open blocker carried into M2:** HTTP submit can reach real
+`sqlite.Submit` without a constructed frozen snapshot. `SnapshotProvider` is
+optional; when nil, `SubmitParams.Snapshot` is empty and SQLite returns
+`ErrNilSnapshot`. M2-1 (deterministic evidence ingestion) is the approved fix.
+
+## M2 DAG
 
 ```text
-P0 Canonical domain alignment
+M2-1 Deterministic evidence ingestion
+ |        (closes the HTTP nil-snapshot blocker)
+ v
+M2-2 Stronger finding + citation contract
  |
  v
-P1A SQLite store opening + read-only pool
+M2-3 One safe real-provider adapter
  |
- v
-P1B Checksummed migration runner
- |
- v
-P1C BEGIN IMMEDIATE + bounded busy retry
- |
- v
-P2 Core schema
- |
- v
-P3 Transition, citation, and immutability guards
- |
- v
-P4 Atomic submission + idempotency
- |\
- | +--------------------+
+ +----------------------+
  v                      v
-P5 Read models       P6 FIFO claim + timing policy
- |                      |
- |                   P7 Cancel request
- |                      |
- +-------------------P8 Guarded dispatch
-             \          /
-              v        v
-              P9 Atomic role publication
-                       |
-                       v
-              P10 Control sweeps + restart recovery
-                       |
-                       v
-              P11 Transactional composer + report reads
-                       |
-                       v
-              P12 Integration and race gate
+M2-4 Four-arm         M2-5 Concierge change-review
+     benchmark              experiment
 ```
 
-## Slice index
+M2-1→M2-3 are ordered product capabilities. M2-4 and M2-5 are validation
+systems; both depend on M2-3 being able to produce real review output but are
+otherwise independent of each other.
 
-| Slice | Deliverable | Depends on | Status |
-|---|---|---|---|
-| P0 | Canonical composer/reason/count/report contract | current core | COMPLETE (`171b9d2`) |
-| P1A | SQLite open/close, writer pragmas, and read-only pool | P0 | COMPLETE (`c21c240`) |
-| P1B | Ordered checksummed migration runner | P1A | COMPLETE (`0975ad0`) |
-| P1C | Reusable `BEGIN IMMEDIATE` and bounded busy retry | P1B | COMPLETE (`71da0fe`) |
-| P2 | Core tables, enum/check/FK/unique constraints | P1C | COMPLETE (`9db3dab`) |
-| P3 | State-transition, citation, and immutability triggers | P2 | COMPLETE (`975c123`) |
-| P4 | Request hash v1 and atomic create/idempotency | P3 | COMPLETE (`6906d85`) |
-| P5 | Deterministic read models | P4 | COMPLETE (`7c8016c`) |
-| P6 | Validated timing policy and single-session FIFO claim | P4 | COMPLETE (`32c6ec1`) |
-| P7 | Idempotent cancellation request mutation | P6 | COMPLETE (`c43fdc0`) |
-| P8 | Deterministic guarded dispatch and cancel race | P7 | COMPLETE (`b2218d7`) |
-| P9 | Compare-and-set success/failure publication | P5, P8 | COMPLETE (`61241f4`) |
-| P10 | Cancel/cutoff/deadline sweeps and restart recovery | P9 | COMPLETE (`7945ee6`) |
-| P11 | Transactional composition and terminal-only report reads | P10 | COMPLETE (`3066996`) |
-| P12 | End-to-end persistence and concurrency proof | P11 | COMPLETE (`7e57a05`) |
+## M2 slice index
 
-P1A has the only executable packet now. Later packets are written after predecessor
-verification so they cite real APIs and paths rather than guesses.
+| Slice | Deliverable | Depends on | Type | Status |
+|---|---|---|---|---|
+| M2-1 | Deterministic evidence ingestion | W7, P4 | product | NOT STARTED |
+| M2-2 | Stronger finding/citation contract | M2-1 | product | NOT STARTED |
+| M2-3 | One safe real-provider adapter | M2-2 | product | NOT STARTED |
+| M2-4 | Four-arm review benchmark | M2-3 | validation | NOT STARTED |
+| M2-5 | Concierge change-review experiment | M2-3 | validation | NOT STARTED |
 
-## Slice contracts
+Only M2-1 gets an executable packet first. Later packets are written after the
+predecessor is independently verified, so they cite real APIs and paths.
 
-### P0 — Canonical domain alignment
+## M2 slice contracts
 
-Remove stale semantics before they enter the schema:
+### M2-1 — Deterministic evidence ingestion
 
-- add `role_failures` and canonical reason/cause validators;
-- composer reasons come from role interruption causes, not cancel flag;
-- keep `cancel_requested` independently on the report/read model;
-- implement canonical status/reason precedence;
-- rename failed count to incomplete count and JSON field;
-- test all status, reason, cause, count, and JSON cases.
-
-Forbidden: persistence, worker, API, or provider behavior.
-
-### P1A — Store opening and read-only pool
-
-Create the pure-Go SQLite package and connection lifecycle only:
-
-- validate a real file path plus a whole-millisecond busy timeout within SQLite's
-  signed 32-bit millisecond range;
-- open one writer pool with exactly one connection;
-- enforce and verify foreign keys, WAL, and busy timeout;
-- open a distinct `mode=ro` pool after writer initialization;
-- prove read-only writes fail and committed writer data is visible;
-- close partial resources on open failure and surface close errors.
-
-No migrator, transaction helper, retry loop, or product table in P1A.
-
-### P1B — Checksummed migration runner
-
-Add embedded numbered migrations and migration metadata:
-
-- parse and order `NNN_name.sql`; reject malformed/duplicate/empty input;
-- compute SHA-256 over exact SQL bytes;
-- atomically apply SQL plus metadata containing version, name, checksum, and UTC
-  applied timestamp;
-- unchanged reopen is idempotent;
-- changed name/checksum for an applied version fails closed;
-- failed SQL rolls back effects and metadata;
-- tests inject controlled `fs.FS` fixtures.
-
-P1B still adds no SpecCouncil product table; P2 owns the first production schema.
-
-### P1C — Immediate transactions and bounded busy retry
-
-Add the reusable write boundary:
-
-- pin a dedicated connection and use explicit `BEGIN IMMEDIATE`;
-- commit callback success; roll back callback error/panic;
-- retry only structured SQLite `BUSY`/`LOCKED` codes;
-- maximum attempts are `1 + DB_RETRIES`;
-- honor context cancellation and configured backoff;
-- typed exhaustion records attempt count and preserves the last driver error;
-- domain/validation/conflict/stale errors are never retried.
-
-Supervisor exit is a later worker responsibility. P1C exposes retry exhaustion
-distinctly for that phase.
-
-### P2 — Core schema
-
-Add the first production migration. Tables represent:
-
-- immutable snapshots and ordered evidence units;
-- sessions with project/idempotency/request hash/snapshot/state/cancel/timing/
-  terminal reason/count fields;
-- role runs with canonical role, status, cause, error, and call metadata;
-- findings and ordered basis references.
-
-Enforce with CHECK/FK/UNIQUE constraints:
-
-- all canonical enum values only;
-- `UNIQUE(project_id, idempotency_key)`;
-- `UNIQUE(session_id, role)`;
-- per-role finding-ID uniqueness;
-- per-finding basis-reference uniqueness and stable ordinal uniqueness;
-- unique snapshot unit IDs and ordinals;
-- valid null/non-null field combinations for each stored state.
-
-Do not try to enforce “exactly four children” with exotic triggers. P4 atomically
-inserts the four canonical roles; the schema enforces identity/uniqueness, and the
-composer later requires exact completeness.
-
-### P3 — Transition, citation, and immutability guards
-
-Add a new migration and direct database rejection tests for:
-
-```text
-role: pending → in_flight | interrupted
-      in_flight → complete | failed | interrupted
-session: queued → reviewing
-         reviewing → complete | partial | failed
-```
-
-Terminal states have no outgoing transitions. Also enforce:
-
-- snapshots and units cannot be updated or deleted;
-- findings may be inserted only while their role is in-flight;
-- every basis ref exists in that session's snapshot;
-- findings and basis refs cannot be updated or deleted after insertion;
-- terminal role status, cause/error, and call metadata are immutable;
-- illegal cause/error/status combinations fail closed.
-
-### P4 — Atomic submission and idempotency
-
-Persistence input is explicit:
-
-```text
-project_id
-idempotency_key
-title
-content
-already-frozen evidence.Snapshot
-```
-
-The store recomputes `evidence.Freeze(snapshot.ID, snapshot.Units)` and rejects a
-missing/mismatched snapshot hash. It does not split content.
+Convert a submitted design into stable evidence units so HTTP submission can
+build the frozen snapshot SQLite requires.
 
 Required behavior:
 
-- request hash v1 covers version 1 + exact project_id/title/content;
-- strict UTF-8, no trim, no Unicode normalization, submitted line endings
-  preserved, deterministic length-delimited encoding, SHA-256;
-- one immediate transaction creates snapshot, units, queued session, and the
-  four pending roles in canonical order;
-- same project/key/hash returns existing; different hash returns typed conflict;
-- different projects may reuse a key;
-- concurrent same-key loser rereads and compares;
-- any failure rolls back every created row;
-- no queue/admission cap is added.
+- Split submitted `title`/`content` into ordered `evidence.Unit` values covering:
+  - headings;
+  - paragraphs;
+  - list items;
+  - tables;
+  - code blocks.
+- Preserve explicit author IDs such as `REQ-12` as the unit ID when present;
+  otherwise assign deterministic IDs.
+- Assign each unit a canonical `evidence.UnitKind`.
+- Produce byte-identical units and ordering for identical input (deterministic:
+  no wall-clock, no randomness, no map iteration order).
+- Record a **splitter version** so future ingestion changes are identifiable.
+- Feed the produced units into the existing `evidence.Freeze` path so the
+  snapshot hash is computed exactly as today; do not change hashing.
+- Wire ingestion as the HTTP `SnapshotProvider` so submit no longer reaches
+  SQLite with an empty snapshot. Construction fails closed when no ingestion
+  source is supplied.
 
-### P5 — Deterministic read models
+Rationale: closes the W7 nil-snapshot blocker; gives every later M2 slice a real
+snapshot to review.
+
+Forbidden: baseline tables, snapshot lineage/parentage, diffing, or any change to
+the frozen snapshot hash algorithm.
+
+Tests: deterministic unit output per input class; ID preservation vs assignment;
+splitter-version identity; byte-identical repeat runs; HTTP submit against a real
+`*sqlite.Store` now succeeds end to end (the current failing path).
+
+### M2-2 — Stronger finding and citation contract
+
+Make findings express what kind of concern they are and anchor omissions
+explicitly.
 
 Required behavior:
 
-- reconstruct snapshot and verify stored hash; preserve unit ordinal order;
-- load session and exactly four roles in canonical order;
-- load findings and ordered unique refs deterministically;
-- return typed not-found scoped by project/session identifiers for future 404
-  mapping;
-- status reads work for every session state;
-- reads use the read-only pool and never compose, repair, or write;
-- repeated reads return deeply equal values.
+- Each finding separates: issue, recommendation, severity, cited evidence, and a
+  **finding kind**:
+  - existing text (a concern about content that is present);
+  - conflicting text (a contradiction between cited units);
+  - missing information (an omission).
+- Omission findings carry an explicit anchor (the scope/section the omission is
+  about) instead of citing unrelated evidence to satisfy the current
+  1–5 `basis_refs` rule.
+- Preserve current structural validation (ID existence, uniqueness, count,
+  allowed-snapshot membership). Add kind/anchor validation on top; do not weaken
+  existing checks.
+- Document plainly that citation validation proves a referenced unit exists, not
+  that it semantically supports the finding.
 
-### P6 — FIFO claim and timing policy
+Rationale: current validation proves a cited ID exists; it does not prove the
+citation supports the finding, and it forces omission findings to cite tangential
+text.
 
-Define a validated timing policy:
+Forbidden: cross-review finding identity, `fixed`/`reopened`/`regressed`
+lifecycle, or baseline/proposed citation namespaces (all M3).
+
+Tests: each finding kind validated and rejected correctly; omission anchor
+required and validated; existing basis-ref regression tests stay green.
+
+### M2-3 — One safe real-provider adapter
+
+Connect exactly one real AI provider behind the existing provider boundary.
+
+Required behavior:
+
+- Configure server-side only: base URL, model identifier, and credential from a
+  provider-specific environment variable. No secret in source, packets, reports,
+  prompts, logs, or chat.
+- Enforce a spending limit, a per-request timeout, and the existing bounded
+  two-calls-per-role budget.
+- Redact secrets and raw provider errors from all persisted output and logs.
+- Keep the fake provider as the automated-test provider; the real adapter is
+  exercised only by an explicit, opt-in safe smoke path, never by the normal
+  suite.
+- Before any live call, run a same-working-directory boolean presence probe for
+  provider, model, and credential; never print the key or `.env`.
+- Treat "OpenAI-compatible" as the request surface only; probe the actual
+  response envelope before accepting a gateway.
+
+Rationale: current tests prove engine mechanics, not real review quality.
+
+Forbidden: making validation permissive to avoid real-provider failures;
+inventing or remapping evidence references; storing credentials.
+
+Tests: config validation; redaction; budget/timeout enforcement with a stub
+transport; the normal suite still uses the fake provider only.
+
+### M2-4 — Four-arm review benchmark (validation system)
+
+Compare four approaches on the same designs to prove whether four roles beat one
+strong call.
+
+Arms:
+
+1. free-form AI review;
+2. one structured AI call (same schema, caps, validator);
+3. four specialist reviewers (current design);
+4. four generic calls merged together.
+
+Conditions:
+
+- same source evidence for every arm;
+- normalized report rendering so blinding is fair;
+- comparable token budgets;
+- each arm repeated at least three times;
+- seeded defects in real approved designs (contradiction, dropped requirement,
+  weakened auth check, missing failure path) for objective ground truth.
+
+Measure:
+
+- defect recall;
+- false findings;
+- citation support (not just existence);
+- important misses;
+- repeated findings;
+- run-to-run variation;
+- cost;
+- latency.
+
+Baseline artifacts must be deterministic and reproducible; capture latency and
+cost separately as explicitly non-baseline telemetry. Pre-register thresholds
+for "meaningful advantage" before running.
+
+Rationale: we must prove whether four roles are better than one strong call.
+
+Forbidden: shipping the benchmark harness as product behavior; changing the v1
+runtime to make an arm look better.
+
+### M2-5 — Concierge change-review experiment (validation system)
+
+Manually test the future workflow with real users:
 
 ```text
-DISPATCH_CUTOFF > 0
-CALL_TIMEOUT > 0
-SESSION_HARD_DEADLINE >= DISPATCH_CUTOFF + CALL_TIMEOUT
+Approved design
++ proposed revision
+→ cited change review
+→ human decision
 ```
 
-Claim uses database time and one immediate transaction:
+Method:
 
-- refuse to claim while any session is reviewing;
-- select oldest queued session by `created_at, id` even when it already has
-  `cancel_requested = true`;
-- change exactly one `queued → reviewing`;
-- set started, dispatch-cutoff, and hard-deadline timestamps atomically;
-- zero-row race returns typed no-work/retry outcome.
+- historical examples first;
+- then a 4–6 week live concierge trial if suitable users are available.
 
-No process lock, goroutine, or provider call in this slice.
+Measure:
 
-### P7 — Cancellation request
+- preparation time;
+- decision usefulness;
+- whether findings change decisions;
+- whether users voluntarily return with another meaningful change.
 
-Implement only the request mutation:
+Rationale: this tests real demand before we build baseline tables and
+change-review infrastructure.
 
-- queued/reviewing false → true returns effective true;
-- already true returns effective false;
-- terminal session returns effective false without mutation;
-- unknown/project-mismatched session returns typed not-found;
-- concurrent cancels have one effective winner;
-- no role state changes and no composer execution here.
+Forbidden: building any M3 persistence, API, or lifecycle to run the experiment;
+the concierge work is manual and instrumented, not new product code.
 
-### P8 — Deterministic guarded dispatch
+## Not planned for implementation yet (M3 candidates)
 
-One authoritative immediate transaction must:
+These are held out of M2 entirely and built only if M2 shows real users value the
+workflow:
 
-1. select the lowest canonical pending role (Requirements, Architecture, QA,
-   Security);
-2. recheck session reviewing, cancel false, database time before cutoff, and
-   database in-flight count below two;
-3. change only that selected role `pending → in_flight`;
-4. return a typed no-dispatch reason when a guard fails.
+1. approved design baselines;
+2. baseline version history;
+3. automated design diffs;
+4. change-review sessions;
+5. human Accept / Revise / Reject records;
+6. ADR Markdown export;
+7. active-baseline concurrency protection.
 
-Prove with barrier-based races:
+## M2 definition of done
 
-- never more than two in-flight roles;
-- no later role dispatches while an earlier canonical role remains pending;
-- committed cancellation beats later dispatch;
-- committed dispatch remains legitimately in-flight when cancellation follows.
-
-### P9 — Atomic role publication
-
-Success transaction:
-
-- require and compare-and-set from in-flight;
-- insert all validated findings and ordered refs;
-- store call metadata;
-- set complete;
-- all or nothing.
-
-Failure transaction:
-
-- require and compare-and-set from in-flight;
-- store typed error and call metadata;
-- set failed;
-- no findings.
-
-Late/duplicate terminal writes fail closed. Finding/ref failure rolls back role
-completion. This uses P1's bounded immediate-transaction retry boundary; it does
-not implement worker exit.
-
-### P10 — Control sweeps and restart recovery
-
-Transactional, idempotent operations:
-
-- cancel sweep: pending → interrupted/user_cancelled; in-flight unchanged;
-- cutoff sweep: pending → interrupted/deadline_cutoff; in-flight unchanged;
-- hard-deadline sweep: pending → interrupted/deadline_cutoff; worker later
-  cancels provider contexts and publishes in-flight timeout through P9;
-- restart sweep over stale reviewing sessions:
-  - complete/failed/interrupted unchanged;
-  - in-flight → interrupted/process_restart;
-  - pending → interrupted/user_cancelled if cancellation was recorded, otherwise
-    interrupted/process_restart;
-  - queued sessions untouched;
-  - never replay provider work.
-
-### P11 — Transactional composer and reports
-
-Composer in one immediate transaction:
-
-- reread exactly four roles;
-- require all terminal and zero in-flight;
-- derive canonical counts/status/reason;
-- conditional reviewing → terminal update with one winner;
-- concurrent second call returns typed already-finalized without divergence.
-
-Report and status reads use the read-only pool. Report method:
-
-- rejects every nonterminal session with typed `not_finished` for future HTTP 409;
-- includes session status, terminal reason, cancel flag, completed/incomplete
-  counts, per-role status/cause/error/call metadata, and findings;
-- orders roles/findings deterministically;
-- never composes, repairs, calls providers, or writes.
-
-### P12 — Integration and race gate
-
-Prove the phase as one system:
-
-1. submit → claim → dispatch 2 → publish → dispatch remaining → publish →
-   compose complete;
-2. concurrent same-key same-hash winner/loser;
-3. same key/different hash conflict;
-4. queued cancellation → claim → cancel sweep → zero calls represented as
-   partial/user_cancelled;
-5. cancel beats pending dispatch;
-6. dispatch beats cancel and in-flight publication drains;
-7. cutoff interrupts pending while in-flight can publish;
-8. hard deadline interrupts pending; in-flight timeout publishes failed; late
-   success cannot overwrite terminal state;
-9. restart preserves complete findings, interrupts unfinished, and replays none;
-10. finding/ref insertion failure rolls back completion;
-11. busy/locked writes retry only to configured bound and surface typed exhaustion;
-12. report before terminal returns typed not_finished;
-13. repeated report/composer calls do not mutate terminal data;
-14. modified applied migration checksum fails open.
-
-Use barriers, not sleeps. Run repeatedly and with the race detector:
-
-```bash
-go test -race ./...
-```
-
-## Persistence phase definition of done
-
-- P0, P1A–P1C, and P2–P12 each have an independently verified commit.
-- Every acceptance case is executable test evidence.
-- Normal tests, race tests, vet, formatting, and diff checks pass.
-- Final tree is clean and contains no later-phase code.
+- M2-1 through M2-3 each have an independently verified commit with executable
+  test evidence, and every proven v1 guarantee is unchanged.
+- The HTTP nil-snapshot blocker is closed by real end-to-end submission against a
+  real `*sqlite.Store`.
+- M2-4 and M2-5 produce recorded, reproducible evidence with pre-registered
+  thresholds; results are reported as measured facts, not as proof the product is
+  "verified" or "independent".
+- Normal tests, race tests (WSL where native is CGO-blocked), vet, formatting,
+  and diff checks pass; final tree is clean and contains no M3 code.
 - `docs/ENGINE-CONTRACT.md` reflects only verified implementation facts.
-- README remains product-focused.
-- Hermes independently verifies the final repository.
-
-Completing persistence unlocks the next phase: exclusive worker ownership,
-serialized dispatch, two-role concurrency, provider attempt deadlines, and
-fail-stop process behavior.
+- A separate, explicitly approved M3 contract is required before any M3 candidate
+  is implemented.
