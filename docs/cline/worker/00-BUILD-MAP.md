@@ -48,10 +48,10 @@ git status --short
 W1 exclusive process ownership + crash-safe lock COMPLETE (8798053)
  |
  v
-W2 restart recovery + single-session claim loop READY
+W2 restart recovery + single-session claim loop COMPLETE (939d24c)
  |
  v
-W3 serialized guarded dispatch loop
+W3 serialized guarded dispatch loop READY
  |
  v
 W4 role execution deadlines and provider-attempt budget

@@ -282,6 +282,19 @@ Package `internal/worker` provides the verified OS-backed exclusive process lock
 - `Context cancellation`: cancellation before or during acquisition returns context cancellation promptly without leaking live locks or helper goroutines.
 - `Strict persistence isolation`: lock acquisition and release never open, query, or mutate SpecCouncil SQLite database files or schema migrations, and package `internal/worker` maintains zero imports of storage packages.
 
+### Worker restart recovery and single-session claim
+
+Package `internal/worker` provides the verified worker execution seam via `RunOnce`:
+
+- `Validated configuration`: validates non-empty clean lock path, non-nil store, non-zero explicit restart cutoff, and valid timing policy (`SessionHardDeadline >= DispatchCutoff + CallTimeout`) before attempting lock acquisition or touching storage.
+- `Exclusive process ownership`: acquires OS-backed `ProcessLock` and returns typed sentinel `ErrAlreadyOwned` promptly upon contention without opening or altering database rows.
+- `Deferred release and error preservation`: defers lock release across all paths, preserving primary operation errors over release errors via `errors.Join`, and surfacing release errors when operations otherwise succeed without hiding successful claim outcomes.
+- `Recovery before claim ordering`: executes exactly one `SweepRestartRecovery` using the caller's explicit cutoff timestamp before attempting any claim; fails closed and never claims if recovery encounters persistence errors.
+- `Single FIFO session claim`: invokes `ClaimSession` exactly once with caller-provided validated timing policy, claiming at most one queued session via deterministic FIFO order (`created_at ASC, id ASC`); returns authoritative claim or typed no-work result without error.
+- `No-work success semantics`: returns non-nil `RunResult` and nil error when no queued session exists, treating empty queue as a successful run.
+- `Zero forbidden side-effects`: strictly runs synchronously with zero background goroutines, provider invocations, role dispatch loops, composer executions, HTTP/auth routes, or transactions held across lock/recovery/claim boundaries.
+- `Persistence package isolation`: orchestrates operations via generic interfaces `SessionStore` and `TimingPolicyValidator` satisfied directly by `*sqlite.Store` without `internal/worker` importing persistence packages.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, provider call execution,
