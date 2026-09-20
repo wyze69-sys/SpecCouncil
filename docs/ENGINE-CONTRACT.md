@@ -322,10 +322,24 @@ Package `internal/worker` and `internal/review` provide the verified deadline-bo
 - `Strict validation preservation`: validates provider output strictly against schema and evidence references in the immutable frozen snapshot; malformed provider output never becomes a finding.
 - `Strict worker phase isolation`: strictly executes role provider attempts and returns terminal `review.RoleOutcome` without touching SQLite transactions, publication, report composition, dispatch loops, or secondary roles.
 
+### Worker publication, composition, and supervisor boundary
+
+Package `internal/worker` provides the verified publication, composition, and supervisor boundary integration via `SuperviseSession` and `Supervise`:
+
+- `Claimed-session boundary`: operates strictly on a single already-claimed `reviewing` session; never claims another session, executes restart recovery, or acquires redundant process locks inside the session supervisor.
+- `Reservation to execution`: each committed role reservation from the serialized dispatcher is executed exactly once via `worker.Execute` with the session's immutable frozen snapshot, timing policy, call timeout, and hard deadline; no provider call is made before reservation commit or while SQLite transactions are open.
+- `Compare-and-set publication`: publishes terminal role outcomes atomically via narrow persistence interfaces (`PublishRoleSuccess`, `PublishRoleFailure`); enforces `in_flight -> complete` (with validated findings and citations) or `in_flight -> failed` (with canonical error metadata); failed roles contribute zero findings.
+- `Publication ordering and CAS conflict handling`: notifies the serialized dispatcher (`NotifyRoleCompleted`) strictly after publication returns; typed publication conflicts (`PublicationConflictError`) make no second provider call, perform no secondary writes, and surface cleanly without rolling back committed state.
+- `Cancellation and deadline bounds`: respects context cancellation, dispatch cutoff, and session hard deadlines; stops new reservations promptly, drains in-flight roles within their deadline contexts, and publishes canonical timeout/failure outcomes without inventing non-canonical statuses.
+- `Transactional session composition`: triggers composition exactly once after all four roles are terminal and persisted `in_flight == 0`; retrieves deterministic report and terminal session models via `ComposeSession` without modifying reports or deriving verdicts in worker code; preserves idempotency on duplicate composition.
+- `Supervisor boundary and persistence failure`: surfaces persistence errors after bounded SQLite retry exhaustion directly to the outer supervisor caller as a truthful non-nil error requiring process restart; does not implement a daemon, automatic restart loop, broker, lease, or heartbeat.
+- `Resource and lock cleanup`: guarantees deferred release of OS-backed process locks, stop/drain of dispatchers, and termination of all worker goroutines across success, no-work, cancellation, publication conflicts, and persistence failures.
+- `Persistence package isolation`: communicates with persistence strictly through narrow interfaces (`SessionPublisher`, `SessionComposer`, `RoleReservationStore`, `SessionStatusReader`, `SnapshotReader`) satisfied by `*sqlite.Store` without importing `internal/storage/sqlite` in worker production code.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, the real provider adapter,
-publication and composition integration, and supervised worker process orchestration.
+and supervisor daemon or cross-worker orchestration.
 
 ## Known implementation gaps against the canonical flow
 
