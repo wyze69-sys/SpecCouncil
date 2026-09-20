@@ -33,11 +33,13 @@ nine zero-padded fractional digits, for example:
 2006-01-02T15:04:05.000000000Z
 ```
 
-Update every production timestamp writer in the allowed files, including:
-claim timestamps, submission `created_at`, composition `terminal_at`, and
-migration `applied_at`. Existing parsing may continue to use RFC3339Nano.
-Do not leave production uses of variable-width `Format(time.RFC3339Nano)` in
-these paths.
+Update every production timestamp formatter in the allowed files, including claim
+error diagnostics, claim timestamps, submission `created_at`, composition
+`terminal_at`, and migration `applied_at`. Existing parsing may continue to use
+RFC3339Nano. The shared `formatUTCTimestamp` helper is used by dispatch,
+publication, and sweeps; those files must not be modified in R1. Do not leave
+production uses of variable-width `Format(time.RFC3339Nano)` in the allowed
+files.
 
 ## Required regression proof
 
@@ -70,7 +72,13 @@ git diff --check
 ```
 
 Inspect production code to prove no variable-width timestamp writer remains in
-the allowed paths. Do not run or claim `go test -race` unless available.
+the allowed paths. At minimum, this must return no matches:
+
+```bash
+git grep -n 'Format(time.RFC3339Nano)' -- internal/storage/sqlite/claim.go internal/storage/sqlite/migrate.go internal/storage/sqlite/submit.go internal/storage/sqlite/compose.go
+```
+
+Do not run or claim `go test -race` unless available.
 
 Commit exactly:
 
