@@ -28,7 +28,7 @@ func TestTimestampMigrationNormalizesLegacyWholeSecondRows(t *testing.T) {
 		INSERT INTO snapshots (id, hash, project_id, title, content, normalization_version, created_at)
 		VALUES ('legacy_snap', '012345678901234567890123456789012345678901234567890123456789abcd', 'legacy_proj', 'Legacy', 'Legacy content', 1, '2026-09-19T12:00:00Z');
 		INSERT INTO sessions (id, project_id, idempotency_key, request_hash, snapshot_id, status, created_at)
-		VALUES ('legacy_session', 'legacy_proj', 'legacy_key', '012345678901234567890123456789012345678901234567890123456789abcd', 'legacy_snap', 'queued', '2026-09-19T12:00:00Z');
+		VALUES ('legacy_session', 'legacy_proj', 'legacy_key', '012345678901234567890123456789012345678901234567890123456789abcd', 'legacy_snap', 'queued', '2026-09-19T12:00:00.1Z');
 		INSERT INTO role_runs (id, session_id, role, status, created_at)
 		VALUES
 		 ('legacy_rr_req', 'legacy_session', 'requirements', 'pending', '2026-09-19T12:00:00Z'),
@@ -47,7 +47,7 @@ func TestTimestampMigrationNormalizesLegacyWholeSecondRows(t *testing.T) {
 	if err := writer.QueryRowContext(ctx, "SELECT created_at FROM sessions WHERE id = 'legacy_session';").Scan(&createdAt); err != nil {
 		t.Fatalf("read normalized session: %v", err)
 	}
-	if createdAt != "2026-09-19T12:00:00.000000000Z" {
+	if createdAt != "2026-09-19T12:00:00.100000000Z" {
 		t.Fatalf("normalized session created_at = %q", createdAt)
 	}
 
