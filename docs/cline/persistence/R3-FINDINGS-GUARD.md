@@ -33,6 +33,7 @@ internal/storage/sqlite/migrations/004_findings_insert_guard.sql
 internal/storage/sqlite/publish.go
 internal/storage/sqlite/migrate_test.go
 internal/storage/sqlite/state_guard_test.go
+internal/storage/sqlite/read_test.go
 internal/storage/sqlite/findings_guard_test.go
 docs/ENGINE-CONTRACT.md
 ```
@@ -73,11 +74,12 @@ END;
 - Do not change `PublishRoleFailure` (it inserts nothing).
 - Preserve error messages and conflict semantics.
 
-3. Update stale count assertions:
+3. Update stale count assertions and legacy direct-insert fixtures:
 
 - `internal/storage/sqlite/migrate_test.go`: expectations that assert exactly 3 migrations → 4.
 - `internal/storage/sqlite/state_guard_test.go`: expectations that assert exactly 19 triggers → 20.
-- Change only the numeric expectation; do not weaken the check.
+- `internal/storage/sqlite/read_test.go`: two fixtures seed findings directly via `INSERT INTO findings` while the role is already `complete`/`failed`. With the trigger active those inserts correctly abort, so the fixtures must be changed to bypass the trigger by inserting directly via the underlying table writes or by temporarily seeding through the proper `in_flight` lifecycle (status `in_flight` → insert findings → transition to terminal). Change only the setup path for those two tests; do not alter read-model assertions.
+- Change only the numeric expectation or fixture setup; do not weaken the checks.
 
 4. After migration, a direct SQL insert:
 
@@ -104,7 +106,7 @@ Add `internal/storage/sqlite/findings_guard_test.go` with deterministic tests us
 ## Verification
 
 ```bash
-gofmt -w internal/storage/sqlite/migrations/004_findings_insert_guard.sql internal/storage/sqlite/publish.go internal/storage/sqlite/migrate_test.go internal/storage/sqlite/state_guard_test.go internal/storage/sqlite/findings_guard_test.go
+gofmt -w internal/storage/sqlite/migrations/004_findings_insert_guard.sql internal/storage/sqlite/publish.go internal/storage/sqlite/migrate_test.go internal/storage/sqlite/state_guard_test.go internal/storage/sqlite/read_test.go internal/storage/sqlite/findings_guard_test.go
 test -z "$(gofmt -l .)"
 go test -v ./internal/storage/sqlite -run TestFindingsInsertGuard
 go test -v ./internal/storage/sqlite -run TestStateGuard
@@ -118,7 +120,7 @@ git diff --check
 Also verify scope:
 
 ```bash
-git diff --name-only | grep -v -E '^(internal/storage/sqlite/migrations/004_findings_insert_guard\.sql|internal/storage/sqlite/publish\.go|internal/storage/sqlite/migrate_test\.go|internal/storage/sqlite/state_guard_test\.go|internal/storage/sqlite/findings_guard_test\.go|docs/ENGINE-CONTRACT\.md|docs/cline/persistence/R3-FINDINGS-GUARD\.md)$' && echo "FORBIDDEN FILES MODIFIED" || echo "scope clean"
+git diff --name-only | grep -v -E '^(internal/storage/sqlite/migrations/004_findings_insert_guard\.sql|internal/storage/sqlite/publish\.go|internal/storage/sqlite/migrate_test\.go|internal/storage/sqlite/state_guard_test\.go|internal/storage/sqlite/read_test\.go|internal/storage/sqlite/findings_guard_test\.go|docs/ENGINE-CONTRACT\.md|docs/cline/persistence/R3-FINDINGS-GUARD\.md)$' && echo "FORBIDDEN FILES MODIFIED" || echo "scope clean"
 git grep -n 'Format(time.RFC3339Nano)' -- internal/storage/sqlite/*.go && echo "VARIABLE WIDTH TIMESTAMP FOUND" || echo "timestamp width clean"
 ```
 
