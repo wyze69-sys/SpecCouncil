@@ -126,6 +126,30 @@ severity rank, role rank, primary basis_ref, category, finding id
 
 A failed or interrupted role contributes zero findings.
 
+### Evidence ingestion (M2-1a)
+
+Package `internal/ingest` provides the first, pure slice of deterministic
+evidence ingestion:
+
+- `ParseBlocks(content string) []Block` splits a submitted design into an
+  ordered list of raw structural blocks classified as `heading`, `paragraph`,
+  `list_item`, `table_row`, or `code`.
+- Parsing is a single forward pass over line-oriented text with a fixed
+  precedence (fence, heading, table row, list item, paragraph) and a mandatory
+  paragraph flush before every structural construct and at end of input.
+- `\r\n` and `\r` normalize to `\n` before classification, so line-ending
+  variants produce byte-equal block slices.
+- `Order` is a strict gap-free 0-based counter, and empty or entirely blank
+  input returns a non-nil empty slice `[]Block{}`.
+- The package is deterministic and pure: no clock, filesystem, network,
+  randomness, map-iteration order, or import of another internal package.
+
+This slice assigns no unit IDs, maps no `evidence.UnitKind`, records no splitter
+version, builds no `evidence.Snapshot`, and adds no HTTP `SnapshotProvider`.
+Those remain separate later slices, so the HTTP nil-snapshot blocker described
+under `Snapshot` is NOT closed by M2-1a and stays open until ingestion is wired
+end to end.
+
 ### SQLite connection foundation
 
 Package `internal/storage/sqlite` provides the verified pure-Go SQLite connection foundation:
