@@ -268,7 +268,7 @@ func (s *Store) ReservePendingRoleScoped(ctx context.Context, projectID, session
 			  AND (
 				SELECT status = 'reviewing'
 				   AND cancel_requested = 0
-				   AND julianday(dispatch_cutoff_at) > julianday(?)
+				   AND dispatch_cutoff_at > ?
 				FROM sessions
 				WHERE id = ?
 			  )

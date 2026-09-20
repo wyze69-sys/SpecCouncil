@@ -1049,3 +1049,16 @@ func TestReserveRole_NoProviderOrGoroutineScope(t *testing.T) {
 		t.Errorf("expected status in_flight, got %s", res.Status)
 	}
 }
+
+func TestReserveRole_SubMillisecondCutoffBeforeBoundary(t *testing.T) {
+	store, _, t0 := setupReviewingSession(t, "sess_cutoff_subms", "proj_subms", 1*time.Second)
+	cutoff := t0.Add(1 * time.Second)
+
+	res, err := store.ReserveRoleWithNow(context.Background(), "sess_cutoff_subms", cutoff.Add(-1*time.Microsecond))
+	if err != nil {
+		t.Fatalf("reserve just before cutoff failed: %v", err)
+	}
+	if !res.Reserved {
+		t.Fatalf("expected reservation before cutoff, got no-work reason %q", res.NoWorkReason)
+	}
+}
