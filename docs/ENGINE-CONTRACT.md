@@ -336,10 +336,22 @@ Package `internal/worker` provides the verified publication, composition, and su
 - `Resource and lock cleanup`: guarantees deferred release of OS-backed process locks, stop/drain of dispatchers, and termination of all worker goroutines across success, no-work, cancellation, publication conflicts, and persistence failures.
 - `Persistence package isolation`: communicates with persistence strictly through narrow interfaces (`SessionPublisher`, `SessionComposer`, `RoleReservationStore`, `SessionStatusReader`, `SnapshotReader`) satisfied by `*sqlite.Store` without importing `internal/storage/sqlite` in worker production code.
 
+### Worker process supervisor boundary
+
+Package `internal/worker` provides the verified one-attempt process supervisor boundary via `RunAttempt`, `ProcessSupervisor`, `RunOnceAttempt`, and `SuperviseAttempt`:
+
+- `One-attempt process boundary`: executes exactly one worker attempt under a caller-owned context, returning its truthful result and error without hiding or rewriting typed errors.
+- `Context ownership`: the caller owns the context; pre-canceled contexts reject execution promptly with the context error before starting work or invoking attempts.
+- `Cooperative shutdown`: cancellation during execution is observable by the attempt via `ctx.Done()` or `ctx.Err()`; the supervisor waits synchronously for the attempt to return before returning itself.
+- `No automatic restart`: does not implement a daemon loop, retry loop, or automatic process restart; restart decisions belong exclusively to the outer deployment or service manager.
+- `Outcome and error preservation`: preserves successful results, no-work results, typed sentinels (`ErrAlreadyOwned`, `context.Canceled`, `context.DeadlineExceeded`), and persistence errors without alteration.
+- `Underlying layer ownership`: process locks, restart recovery sweeps, FIFO claims, role dispatching, provider execution, publication, and composition remain exclusively owned by the released W1–W5 worker layers; W6 does not acquire secondary locks or duplicate worker operations.
+- `Deferred scope`: HTTP endpoints, authentication and authorization, real provider networking, and deployment restart policies remain later work.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, the real provider adapter,
-and supervisor daemon or cross-worker orchestration.
+and deployment restart policy.
 
 ## Known implementation gaps against the canonical flow
 
