@@ -22,6 +22,7 @@ internal/storage/sqlite/migrate.go
 internal/storage/sqlite/submit.go
 internal/storage/sqlite/compose.go
 internal/storage/sqlite/timestamp_regression_test.go
+internal/storage/sqlite/persistence_e2e_test.go
 docs/ENGINE-CONTRACT.md
 ```
 
@@ -39,7 +40,11 @@ error diagnostics, claim timestamps, submission `created_at`, composition
 RFC3339Nano. The shared `formatUTCTimestamp` helper is used by dispatch,
 publication, and sweeps; those files must not be modified in R1. Do not leave
 production uses of variable-width `Format(time.RFC3339Nano)` in the allowed
-files.
+production files.
+
+Update the single stale P12 timestamp assertion in `persistence_e2e_test.go`
+from the old whole-second representation to the new fixed-width representation.
+No other P12 logic or assertions may change.
 
 ## Required regression proof
 
@@ -61,7 +66,7 @@ helpers merely to hide failures.
 ## Verification
 
 ```bash
-gofmt -w internal/storage/sqlite/claim.go internal/storage/sqlite/migrate.go internal/storage/sqlite/submit.go internal/storage/sqlite/compose.go internal/storage/sqlite/timestamp_regression_test.go
+gofmt -w internal/storage/sqlite/claim.go internal/storage/sqlite/migrate.go internal/storage/sqlite/submit.go internal/storage/sqlite/compose.go internal/storage/sqlite/timestamp_regression_test.go internal/storage/sqlite/persistence_e2e_test.go
 test -z "$(gofmt -l .)"
 go test -v ./internal/storage/sqlite -run TestTimestamp
 go test ./internal/storage/sqlite -count=1
