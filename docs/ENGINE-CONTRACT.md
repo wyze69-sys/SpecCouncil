@@ -271,6 +271,17 @@ Package `internal/storage/sqlite` provides verified end-to-end integration and c
 - `Failure and boundary handling`: busy/locked retry exhaustion returns typed `PersistenceUnavailable` at the configured bound; non-terminal report queries fail closed with `SessionNotTerminalError`; tampered migration checksums prevent the store from opening.
 - `Forbidden scope verification`: guarantees zero worker loops, goroutine-held SQLite transactions, provider invocations, network calls, HTTP/auth routes, or UI code in the persistence layer.
 
+### Crash-safe worker process lock
+
+Package `internal/worker` provides the verified OS-backed exclusive process lock foundation via `AcquireProcessLock` and `ProcessLock.Release`:
+
+- `Validated path semantics`: requires a non-empty, clean filesystem path with an existing directory parent; rejects empty, whitespace, and unusable parent paths with inspectable typed `PathError`, sentinel `ErrEmptyPath`, and sentinel `ErrInvalidParentDir` without silently defaulting path locations.
+- `OS-backed handle ownership`: ownership is directly tied to the process-level OS file handle (Windows `CreateFile` with `dwShareMode = 0` and `LockFileEx`, Unix `flock` with `LOCK_EX | LOCK_NB`); never represented by a PID file, database row, or stale marker requiring manual cleanup.
+- `Prompt contention rejection`: a second acquisition attempt against an already owned path fails promptly with typed sentinel `ErrAlreadyOwned` without blocking indefinitely, waiting, or touching storage.
+- `Automatic OS reclamation and idempotent release`: `Release` is safe and idempotent, closing the underlying OS handle and removing no unrelated files; normal process termination and abnormal termination/crashes automatically release the lock at the kernel level, leaving the path immediately acquirable.
+- `Context cancellation`: cancellation before or during acquisition returns context cancellation promptly without leaking live locks or helper goroutines.
+- `Strict persistence isolation`: lock acquisition and release never open, query, or mutate SpecCouncil SQLite database files or schema migrations, and package `internal/worker` maintains zero imports of storage packages.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, provider call execution,

@@ -45,7 +45,7 @@ git status --short
 ## DAG
 
 ```text
-W1 exclusive process ownership + crash-safe lock
+W1 exclusive process ownership + crash-safe lock [VERIFIED]
  |
  v
 W2 restart recovery + single-session claim loop
