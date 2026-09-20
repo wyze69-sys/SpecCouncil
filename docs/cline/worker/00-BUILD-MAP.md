@@ -61,9 +61,13 @@ W5 publication/composition integration and supervisor boundary COMPLETE
  |
  v
 W6 worker process supervisor boundary COMPLETE
+ |
+ v
+W7 HTTP/API composition boundary READY
 
 W5 packet: `docs/cline/worker/W5-PUBLICATION-COMPOSITION.md`
 W6 packet: `docs/cline/worker/W6-PROCESS-SUPERVISOR.md`
+W7 packet: `docs/cline/api/W7-HTTP-API-COMPOSITION.md`
 ```
 
 ## Definition of done
