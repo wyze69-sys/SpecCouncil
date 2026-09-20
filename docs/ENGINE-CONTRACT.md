@@ -348,10 +348,25 @@ Package `internal/worker` provides the verified one-attempt process supervisor b
 - `Underlying layer ownership`: process locks, restart recovery sweeps, FIFO claims, role dispatching, provider execution, publication, and composition remain exclusively owned by the released W1–W5 worker layers; W6 does not acquire secondary locks or duplicate worker operations.
 - `Deferred scope`: HTTP endpoints, authentication and authorization, real provider networking, and deployment restart policies remain later work.
 
+### HTTP API composition boundary
+
+Package `internal/api` provides the verified real `net/http` composition root and routing boundary via `NewServer` and `Server.Handler`:
+
+- `Real net/http composition root and handler`: validates required dependencies (`Store`, `Authenticator`, `Authorizer`) at construction; exposes an `http.Handler` testable via `httptest` without starting a network listener.
+- `Protected route authentication and project authorization boundaries`: protected endpoints (`/v1/projects/{project_id}/reviews...`) authenticate before accessing persistence; pass authenticated `Identity` to project authorization; reject unauthenticated requests with 401.
+- `404 anti-enumeration behavior`: inaccessible or foreign project requests return HTTP 404 rather than 403, preventing enumeration of project existence.
+- `Scoped submit/status/report/cancel persistence calls`: delegates review operations exclusively to scoped persistence methods (`Submit`, `ReadStatusScoped`, `ReadReportScoped`, `RequestCancellationScoped`); preserves exact submitted title/content bytes and route project ID.
+- `Non-terminal report -> 409 not_finished`: report reads on non-terminal sessions fail closed with HTTP 409 Conflict and error code `not_finished`.
+- `Cancellation request semantics`: calling cancel transitions `cancel_requested` from 0 to 1 returning HTTP 202 Accepted (`effective: true`); repeated or terminal cancellations return HTTP 200 OK (`effective: false`); cancellation never mutates role rows or composes reports in the API layer.
+- `Health endpoint`: unauthenticated `GET /healthz` returns `{"status":"ok"}` without touching storage.
+- `Strict request validation and error mapping`: enforces valid UTF-8, strict JSON decoding (disallowing unknown fields and trailing data), required field presence, and unsupported Content-Type rejection; maps persistence unavailable errors to 503 without leaking DSNs, SQL, or internal details.
+- `No worker or provider invocation from HTTP`: the API layer never claims work, dispatches roles, calls providers, or composes reports directly.
+- `No concrete auth/account system yet`: authentication and authorization interfaces accept injectable adapters; user accounts, passwords, JWTs, OAuth, and authorization storage are deferred.
+
 ## Not built yet
 
-API endpoints, authentication and authorization, the real provider adapter,
-and deployment restart policy.
+The real provider adapter, concrete auth/account persistence, and deployment
+restart policy.
 
 ## Known implementation gaps against the canonical flow
 
