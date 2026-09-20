@@ -295,6 +295,20 @@ Package `internal/worker` provides the verified worker execution seam via `RunOn
 - `Zero forbidden side-effects`: strictly runs synchronously with zero background goroutines, provider invocations, role dispatch loops, composer executions, HTTP/auth routes, or transactions held across lock/recovery/claim boundaries.
 - `Persistence package isolation`: orchestrates operations via generic interfaces `SessionStore` and `TimingPolicyValidator` satisfied directly by `*sqlite.Store` without `internal/worker` importing persistence packages.
 
+### Worker serialized guarded dispatch loop
+
+Package `internal/worker` provides the verified serialized guarded dispatch loop via `Dispatcher` (`NewDispatcher`, `Dispatcher.Run`, `Dispatcher.Step`, `Dispatcher.Wake`, `Dispatcher.Tick`, `Dispatcher.NotifyRoleCompleted`, and `Dispatcher.Stop`):
+
+- `Reviewing session scoping`: validates non-empty session ID, non-nil store, and positive tick interval; operates exclusively on the claimed reviewing session without claiming, recovering, or accepting queued sessions.
+- `Single serialized owner`: exactly one owner loop executes reservations and evaluations; concurrent wake and tick signals are coalesced via non-blocking buffered signaling, guaranteeing that wake/tick signals never invoke `ReservePendingRole` directly and concurrent callers never execute overlapping reservation attempts.
+- `Fast-path evaluation ordering`: checks cancellation (`cancel_requested = 1`), dispatch cutoff (`now >= dispatch_cutoff_at`), local execution capacity (`< MAX_IN_FLIGHT = 2`), and canonical next pending role in strict order before reservation, falling back to authoritative SQLite transaction results without turning no-work reasons into generic errors.
+- `Persisted capacity authority`: enforces maximum 2 in-flight roles based on authoritative persisted state; local capacity tracking guards scheduling but never overrides or bypasses SQLite authority.
+- `Post-commit callback execution`: executes injected `OnReserved` callback only after `ReservePendingRole` commits successfully inside SQLite; callback errors or failures cannot roll back or corrupt committed in-flight reservations; callback execution never holds database locks or transactions.
+- `Completion notification wake`: `NotifyRoleCompleted` decrements local in-flight tracking and wakes the owner loop to immediately evaluate and reserve the next pending canonical role.
+- `Clean shutdown and resource release`: stops promptly on context cancellation or explicit `Stop()` without leaking timers, channels, or goroutines; returns typed persistence errors unchanged.
+- `Persistence package isolation`: communicates with storage via generic interfaces `RoleReservationStore` and `SessionStatusReader` satisfied by `*sqlite.Store` without `internal/worker` importing persistence packages.
+- `Strict worker phase scope`: strictly reserves pending roles without invoking providers, composing reports, publishing success or failure, or mutating session records outside authoritative dispatch reservation.
+
 ## Not built yet
 
 API endpoints, authentication and authorization, provider call execution,
