@@ -1,0 +1,7 @@
+# Force Unix line endings for source so gofmt/diff stay clean across platforms.
+* text=auto eol=lf
+*.go text eol=lf
+*.md text eol=lf
+*.sql text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
