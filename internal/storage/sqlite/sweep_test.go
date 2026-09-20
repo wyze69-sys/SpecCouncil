@@ -59,6 +59,9 @@ func TestCancelSweep_ReviewingSession_PendingRolesInterrupted(t *testing.T) {
 	store, _, _ := setupTestReviewingSession(t, "sess_can_rev", "proj_can_rev", t0)
 	ctx := context.Background()
 
+	if _, err := store.RequestCancellation(ctx, "sess_can_rev"); err != nil {
+		t.Fatalf("RequestCancellation: %v", err)
+	}
 	sweepTime := t0.Add(5 * time.Minute)
 	res, err := store.SweepCancellationWithNow(ctx, "sess_can_rev", sweepTime)
 	if err != nil {
@@ -160,6 +163,10 @@ func TestCancelSweep_InFlightAndTerminalRolesUnchanged(t *testing.T) {
 
 	// 4. Security is still pending.
 
+	// Request cancellation before running the sweep.
+	if _, err := store.RequestCancellation(ctx, "sess_can_mixed"); err != nil {
+		t.Fatalf("RequestCancellation: %v", err)
+	}
 	// Run cancellation sweep.
 	sweepTime := t0.Add(6 * time.Minute)
 	res, err := store.SweepCancellationWithNow(ctx, "sess_can_mixed", sweepTime)
@@ -249,6 +256,9 @@ func TestCancelSweep_Idempotency(t *testing.T) {
 	store, _, _ := setupTestReviewingSession(t, "sess_can_idem", "proj_can_idem", t0)
 	ctx := context.Background()
 
+	if _, err := store.RequestCancellation(ctx, "sess_can_idem"); err != nil {
+		t.Fatalf("RequestCancellation: %v", err)
+	}
 	res1, err := store.SweepCancellation(ctx, "sess_can_idem")
 	if err != nil {
 		t.Fatalf("first sweep: %v", err)
@@ -272,6 +282,9 @@ func TestCancelSweep_Concurrency(t *testing.T) {
 	store, _, _ := setupTestReviewingSession(t, "sess_can_conc", "proj_can_conc", t0)
 	ctx := context.Background()
 
+	if _, err := store.RequestCancellation(ctx, "sess_can_conc"); err != nil {
+		t.Fatalf("RequestCancellation: %v", err)
+	}
 	const concurrency = 8
 	var wg sync.WaitGroup
 	startBarrier := make(chan struct{})
@@ -338,6 +351,9 @@ func TestCancelSweep_RollbackOnFailure(t *testing.T) {
 	store, _, _ := setupTestReviewingSession(t, "sess_can_rb", "proj_can_rb", t0)
 	ctx := context.Background()
 
+	if _, err := store.RequestCancellation(ctx, "sess_can_rb"); err != nil {
+		t.Fatalf("RequestCancellation: %v", err)
+	}
 	// Inject commit failure.
 	injectedErr := errors.New("injected commit failure")
 	sweepBeforeCommitHook = func(ctx context.Context, conn *sql.Conn) error {

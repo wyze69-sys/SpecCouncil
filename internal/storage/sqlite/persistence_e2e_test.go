@@ -1539,6 +1539,9 @@ func TestE2E_12_ConcurrentActorsNoLostUpdate(t *testing.T) {
 	}); pubErr != nil {
 		t.Fatalf("publish arch fail: %v", pubErr)
 	}
+	if _, err := store.RequestCancellation(ctx, claimedSessID); err != nil {
+		t.Fatalf("request cancel: %v", err)
+	}
 	if _, sweepErr := store.SweepCancellationWithNow(ctx, claimedSessID, t0.Add(9*time.Minute)); sweepErr != nil {
 		t.Fatalf("sweep cancel: %v", sweepErr)
 	}

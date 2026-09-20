@@ -167,10 +167,11 @@ func (s *Store) SweepCancellationScoped(ctx context.Context, projectID, sessionI
 
 	err = withImmediate(ctx, writer, retryPolicy, func(conn *sql.Conn) error {
 		var (
-			dbProjectID string
-			statusStr   string
+			dbProjectID     string
+			statusStr       string
+			cancelRequested int
 		)
-		err := conn.QueryRowContext(ctx, `SELECT project_id, status FROM sessions WHERE id = ?;`, sessionID).Scan(&dbProjectID, &statusStr)
+		err := conn.QueryRowContext(ctx, `SELECT project_id, status, cancel_requested FROM sessions WHERE id = ?;`, sessionID).Scan(&dbProjectID, &statusStr, &cancelRequested)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return &SessionNotFoundError{SessionID: sessionID, ProjectID: projectID}
@@ -185,6 +186,10 @@ func (s *Store) SweepCancellationScoped(ctx context.Context, projectID, sessionI
 		sessionStatus := domain.SessionStatus(statusStr)
 		if !isValidSessionStatus(sessionStatus) {
 			return fmt.Errorf("%w: invalid session status %q", ErrMalformedData, statusStr)
+		}
+
+		if cancelRequested != 0 && cancelRequested != 1 {
+			return fmt.Errorf("%w: session %q has invalid cancel_requested value %d", ErrMalformedData, sessionID, cancelRequested)
 		}
 
 		// Queued or terminal sessions are no-ops.
@@ -202,6 +207,16 @@ func (s *Store) SweepCancellationScoped(ctx context.Context, projectID, sessionI
 		err = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM role_runs WHERE session_id = ? AND status = 'in_flight';`, sessionID).Scan(&inFlightCount)
 		if err != nil {
 			return fmt.Errorf("count in_flight roles for session %q: %w", sessionID, sanitizeError(err))
+		}
+
+		if cancelRequested != 1 {
+			result = &SweepCancellationResult{
+				SessionID:     sessionID,
+				ProjectID:     dbProjectID,
+				InFlightCount: inFlightCount,
+				NoOp:          true,
+			}
+			return nil
 		}
 
 		// Query pending roles before update.
@@ -264,6 +279,7 @@ func (s *Store) SweepCancellationScoped(ctx context.Context, projectID, sessionI
 			      SELECT 1 FROM sessions
 			      WHERE id = role_runs.session_id
 			        AND status = 'reviewing'
+			        AND cancel_requested = 1
 			  );
 		`, nowStr, sessionID)
 		if err != nil {
@@ -511,6 +527,11 @@ func (s *Store) SweepHardDeadline(ctx context.Context, sessionID string, now tim
 	return s.SweepHardDeadlineScoped(ctx, "", sessionID, now)
 }
 
+// SweepHardDeadlineWithNow executes SweepHardDeadline with an explicit timestamp.
+func (s *Store) SweepHardDeadlineWithNow(ctx context.Context, sessionID string, now time.Time) (*SweepHardDeadlineResult, error) {
+	return s.SweepHardDeadlineScoped(ctx, "", sessionID, now)
+}
+
 // SweepHardDeadlineScoped executes SweepHardDeadline with optional projectID scoping.
 func (s *Store) SweepHardDeadlineScoped(ctx context.Context, projectID, sessionID string, now time.Time) (*SweepHardDeadlineResult, error) {
 	if s == nil {
@@ -540,10 +561,11 @@ func (s *Store) SweepHardDeadlineScoped(ctx context.Context, projectID, sessionI
 
 	err = withImmediate(ctx, writer, retryPolicy, func(conn *sql.Conn) error {
 		var (
-			dbProjectID string
-			statusStr   string
+			dbProjectID    string
+			statusStr      string
+			hardDeadlineAt sql.NullString
 		)
-		err := conn.QueryRowContext(ctx, `SELECT project_id, status FROM sessions WHERE id = ?;`, sessionID).Scan(&dbProjectID, &statusStr)
+		err := conn.QueryRowContext(ctx, `SELECT project_id, status, hard_deadline_at FROM sessions WHERE id = ?;`, sessionID).Scan(&dbProjectID, &statusStr, &hardDeadlineAt)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return &SessionNotFoundError{SessionID: sessionID, ProjectID: projectID}
@@ -609,6 +631,29 @@ func (s *Store) SweepHardDeadlineScoped(ctx context.Context, projectID, sessionI
 			return fmt.Errorf("rows error in_flight roles: %w", sanitizeError(err))
 		}
 
+		// If hard_deadline_at is NULL or now < hard_deadline_at, return NoOp without modifying role_runs.
+		var deadlineReached bool
+		if hardDeadlineAt.Valid && strings.TrimSpace(hardDeadlineAt.String) != "" {
+			deadlineTime, err := parseUTCTimestamp(hardDeadlineAt.String)
+			if err != nil {
+				return fmt.Errorf("%w: malformed hard_deadline_at %q: %w", ErrMalformedData, hardDeadlineAt.String, err)
+			}
+			deadlineReached = !now.Before(deadlineTime)
+		}
+
+		if !deadlineReached {
+			result = &SweepHardDeadlineResult{
+				SessionID:        sessionID,
+				ProjectID:        dbProjectID,
+				InterruptedCount: 0,
+				InterruptedRoles: nil,
+				InFlightRoleIDs:  inFlightRoleIDs,
+				InFlightRoles:    inFlightRoles,
+				NoOp:             true,
+			}
+			return nil
+		}
+
 		// Query pending roles before update.
 		rowsPending, err := conn.QueryContext(ctx, `
 			SELECT role FROM role_runs
@@ -660,8 +705,10 @@ func (s *Store) SweepHardDeadlineScoped(ctx context.Context, projectID, sessionI
 				      SELECT 1 FROM sessions
 				      WHERE id = role_runs.session_id
 				        AND status = 'reviewing'
+				        AND hard_deadline_at IS NOT NULL
+				        AND ? >= hard_deadline_at
 				  );
-			`, nowStr, sessionID)
+			`, nowStr, sessionID, nowStr)
 			if err != nil {
 				return fmt.Errorf("update pending roles on hard-deadline sweep for session %q: %w", sessionID, sanitizeError(err))
 			}
@@ -1027,6 +1074,13 @@ func SweepHardDeadline(ctx context.Context, s *Store, sessionID string, now time
 		return nil, errors.New("cannot execute sweep on nil store")
 	}
 	return s.SweepHardDeadline(ctx, sessionID, now)
+}
+
+func SweepHardDeadlineWithNow(ctx context.Context, s *Store, sessionID string, now time.Time) (*SweepHardDeadlineResult, error) {
+	if s == nil {
+		return nil, errors.New("cannot execute sweep on nil store")
+	}
+	return s.SweepHardDeadlineWithNow(ctx, sessionID, now)
 }
 
 func SweepHardDeadlineScoped(ctx context.Context, s *Store, projectID, sessionID string, now time.Time) (*SweepHardDeadlineResult, error) {
