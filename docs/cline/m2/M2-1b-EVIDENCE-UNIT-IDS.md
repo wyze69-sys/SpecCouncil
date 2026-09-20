@@ -99,11 +99,15 @@ For each block, in input order:
    Examples that match: `REQ-12`, `FR-034`, `NFR-6`, `AC-17`. Examples that do
    NOT match: `REQ12` (no hyphen), `-12` (no leading letter), `REQ-` (no digits),
    `REQ-12abc` (digits not followed by an allowed boundary — the char after the
-   digits is a letter). The captured token (e.g. `REQ-12`) is the base ID exactly
-   as written, preserving its original case.
+   digits is a letter), `REQ-12-2` (the char after the digits is a hyphen, which
+   is NOT an allowed boundary). The captured token (e.g. `REQ-12`) is the base ID
+   exactly as written, preserving its original case.
    - Author-ID detection applies to every block kind EXCEPT `BlockCode`. Code
      block text is significant/verbatim and must never be scanned for an author
      ID; code blocks always use a generated base ID.
+   - ID assignment never mutates `Block.Text`. The captured token is COPIED into
+     the ID; the block's text is returned byte-for-byte unchanged (the author ID
+     also remains at the start of the text).
 
 2. **Generated base ID.** When no author ID applies, the base ID is
    `u` + the block's 0-based `Block.Order`, e.g. `u0`, `u1`, `u2`. (Use
