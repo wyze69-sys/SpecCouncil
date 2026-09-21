@@ -1,7 +1,8 @@
-# M2-2 — Stronger finding and citation contract (DRAFT)
+# M2-2 — Stronger finding and citation contract
 
-Status: **DRAFT for wyze review.** Not released for execution. M2-2a below becomes
-the executable packet once the three decisions at the end are confirmed.
+Status: **READY TO RELEASE.** M2-2a audited against the tree on 2026-09-21; the
+fixture list, symbol names, and validation order in this packet were each checked
+against live source. Not yet executed by a worker.
 
 Authority: `docs/cline/persistence/00-BUILD-MAP.md` § M2-2, `docs/ENGINE-CONTRACT.md`
 (finding schema, validation staging, report ordering), `docs/CANONICAL-FLOW.md`
@@ -63,27 +64,38 @@ anything that ranks findings by model confidence.
 | **M2-2a** | `internal/domain` contract + `internal/review` validation and prompt + every provider-response fixture that must now carry `kind` | M2-1 (done) |
 | **M2-2b** | Persistence: migration `006` (`findings.kind`, `findings.anchor_unit_id`), publish validation + insert, read/compose reconstruction, report ordering fallback to the anchor | M2-2a |
 | **M2-2c** | End-to-end proof (fake provider → worker → SQLite → report), contract docs, independent test round | M2-2b |
+| **M2-2d** (optional, before M2-4) | Format-repair prompt that names the validation errors | M2-2c |
 
 M2-2a deliberately does **not** persist `kind`; it only introduces the contract and
 its validation. That keeps the schema change isolated and reviewable in M2-2b, where
 the migration, the publish path, and the read path change together.
 
-## DRAFT DECISIONS (wyze picks; recommendation is the default the packet assumes)
+## DECISIONS (confirmed 2026-09-21 — wyze delegated, packet assumes these)
 
-1. **Is `kind` required on the wire?**
-   Recommended: **yes, required.** An empty or unknown kind is rejected as
-   `schema_invalid`. Cost: every provider-response fixture in tests and the `cmd/`
-   demo scripts must add `"kind"`. Benefit: no silent defaulting of an omission into
-   "existing".
-2. **May a `missing` finding still carry basis refs?**
-   Recommended: **0..5, anchor mandatory.** Zero refs is the normal omission case;
-   allowing supporting context refs keeps the field useful. The alternative
-   (hard `0`) would reject a legitimate citation of nearby context.
-3. **Must a `conflicting` finding cite at least two units?**
-   Recommended: **yes, 2..5.** A contradiction needs two sides; one ref cannot
-   describe a conflict.
+1. **`kind` is required on the wire** — empty or unknown is `schema_invalid`. No
+   silent default: an omission must never be persisted as "existing" because a
+   field was omitted. Cost: every provider-response fixture and the `cmd/` demo
+   script adds `"kind"`.
+2. **A `missing` finding may carry 0–5 basis refs, and the anchor is mandatory.**
+   Zero refs is the normal omission case; supporting-context refs stay useful.
+3. **A `conflicting` finding must cite 2–5 units.** One citation cannot describe a
+   contradiction between cited units.
 
-## M2-2a — executable packet (pending decision 1–3)
+## Observed gap, deliberately out of M2-2a scope
+
+The format-repair call re-sends the **same** prompt with no mention of the
+validation error it must fix: `internal/review/runner.go:184` passes the original
+`prompt` into `formatRepair`, and `formatRepair` (`:225`–`:260`) sends it unchanged.
+The canonical flow intends "a targeted repair request that names only the validation
+errors". With the fake provider this is invisible (the second call is scripted), but
+with a real model (M2-3) it wastes the only extra call and will make the structured
+arms look worse than they are in the M2-4 benchmark.
+
+Recommendation: a small follow-on slice **M2-2d** that builds a repair prompt naming
+the validation errors, keeping the same two-call budget and the XOR rule. Not part of
+M2-2a; decide before M2-4.
+
+## M2-2a — executable packet (decisions above applied)
 
 Slice: M2-2a (contract + validation)
 Start commit: current `master` HEAD at release time; verify with `git log -1 --oneline`.
@@ -199,21 +211,36 @@ Rules:
 - Unknown fields are rejected. Return no prose outside the JSON object.
 ```
 
-### Fixture sweep (required, mechanical)
+### Fixture sweep (exact, verified against the tree at draft time)
 
-Run `grep -rn 'basis_refs' --include=*_test.go .` and
-`grep -rn 'basis_refs' cmd/` and add `"kind"` to every provider-response JSON body
-that goes through `DecodeAndValidate` or the runner. Known sites to start from:
+The full set of provider-response bodies in the repository is these seven sites
+(verified with `grep -rn '"findings":' --include=*.go . | grep -v sqlite`):
 
-- `internal/review/validate_test.go` (`mkResult` helper plus its inline bodies)
-- `internal/review/runner_test.go`, `internal/review/engine_test.go`
-- `internal/worker/execute_test.go`, `internal/worker/supervise_test.go`
-- `cmd/speccouncil/main.go` (built-in demo scripts)
-- any api or sqlite test that feeds a provider body rather than a struct literal
+| File:line | What it is |
+|---|---|
+| `internal/review/validate_test.go:34` | the `mkFinding(id, severity, refs...)` helper — every `runner_test.go` body comes through it |
+| `internal/review/validate_test.go:81` | inline "unknown in item" body (must stay `invalid_json`) |
+| `internal/review/validate_test.go:105` | inline long-issue body (must stay `schema_invalid`) |
+| `internal/review/validate_test.go:115` | inline empty-issue body (must stay `schema_invalid`) |
+| `internal/worker/execute_test.go:33` | shared valid body |
+| `internal/worker/execute_test.go:373`, `:374` | bodies that cite `R-999-DOES-NOT-EXIST` on purpose — they must stay `invalid_basis_ref`, so add `kind:"existing"` rather than changing the ref |
+| `internal/worker/supervise_test.go:80` | scripted body citing `unit_1` |
+| `cmd/speccouncil/main.go:141` | the `valid` demo body shared by all four roles |
 
-Struct literals (`domain.Finding{...}`) do **not** need `Kind` in this slice,
-because only the decode path enforces it here. Do not add kind checks to
-`internal/storage/sqlite/publish.go` in this slice.
+Recommended helper change, to keep the diff small: keep `mkFinding` as-is and add
+
+```go
+func mkFindingKind(kind, id, severity string, refs ...string) string
+```
+
+with `mkFinding` delegating as `mkFindingKind("existing", id, severity, refs...)`.
+
+Checked and **not** affected in this slice: `internal/api/*_test.go` and
+`internal/storage/sqlite/*_test.go` contain no provider-response bodies; no test
+compares a decoded finding with `reflect.DeepEqual`, so no expected-value literal
+needs a `Kind`; `internal/review/runner_test.go` reuses the `validate_test.go`
+helpers. `internal/storage/sqlite/publish.go` keeps its own fixed 1..5 ref check in
+this slice — do not touch it.
 
 ### Required tests in this slice
 
@@ -252,6 +279,8 @@ gofmt -l .                        # empty
 go vet ./...                      # clean
 go test ./internal/domain ./internal/review -count=10
 go test ./... -count=1            # every package green
+go run ./cmd/speccouncil          # demo must still exit 0, print status "complete",
+                                  # 4 roles complete, and 4 findings
 git add <only the allowed paths>
 git diff --cached --name-only     # exactly the allowed list
 git status --short                # only those paths staged
