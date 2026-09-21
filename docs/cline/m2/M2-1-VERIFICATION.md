@@ -154,6 +154,31 @@ Verification at `8c7165e`: `gofmt -l .` empty; `go vet ./...` clean;
 `go test ./... -count=1` all packages ok; WSL `-race` ok for `ingest` and `api`;
 working tree clean; changed paths exactly the six allowed files.
 
+## Independent test round (2026-09-21)
+
+Task doc: `docs/cline/m2/M2-1g-INDEPENDENT-TEST.md` (`28775bd`). An independent
+tester returned **PASS** on all six steps at `28775bd`, including reproducing the
+old failure on a scratch worktree of `e605999` (**observed 503** on the pre-repair
+tree, so the test can detect the defect), blank-fence parser probes (0 blocks for
+spaces/tab/mixed/CRLF/unterminated), inert-fence hash equality, HTTP cases against
+the real store (blank fence → 400 with nothing persisted, blank fence + heading →
+201, test doc → 201 / 11 units / hash `b52e67a76269…`), replay 201→200, full gates,
+and the WSL race gate.
+
+Coordinator spot-checks of that report (self-reports are not acceptance evidence):
+
+- Tree verified clean at `28775bd`; no stray probe files, no leftover git
+  worktrees; working tree still pristine after the test round.
+- The reported edge case is real and was reproduced: a fence whose only content is
+  U+200B (zero-width space) is treated as non-blank, because
+  `strings.TrimSpace` does not strip U+200B. `BuildSnapshot("snap-zwsp",
+  "```\n\u200b\n```")` succeeds with one `constraint` unit whose text is the
+  three bytes `e2 80 8b`. A bare U+200B line also becomes a paragraph block.
+  Status: **known behavior, deferred** — it is not an error-class defect (the
+  request correctly answers 201), and a stricter blank test would change parser
+  output again and force a splitter bump to `"3"`. Decide in M2-2, which defines
+  what counts as citable evidence text.
+
 ## Conclusion
 
 M2-1 is **verified and accepted** at `8c7165e`. The ingestion engine parses, IDs,
