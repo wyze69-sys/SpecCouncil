@@ -1,0 +1,34 @@
+{
+  "id": "case_auth",
+  "snapshot": {
+    "id": "snap_auth_service",
+    "units": [
+      {"id": "REQ-1", "kind": "requirement", "text": "All API endpoints must authenticate callers using bearer JWT."},
+      {"id": "REQ-2", "kind": "requirement", "text": "Password reset tokens must expire after 15 minutes."},
+      {"id": "COMP-1", "kind": "component", "text": "Auth service validates signatures against public keys."},
+      {"id": "FLOW-1", "kind": "flow", "text": "Client submits login credentials, receiving refresh token."},
+      {"id": "FLOW-2", "kind": "flow", "text": "Unauthenticated health endpoint bypasses auth check."},
+      {"id": "SEC-1", "kind": "constraint", "text": "Admin endpoints require role=admin claim."}
+    ]
+  },
+  "defects": [
+    {
+      "id": "D1",
+      "kind": "weakened_auth",
+      "unit_ids": ["REQ-1", "FLOW-2"],
+      "rationale": "Health endpoint bypasses auth check without rate limiting"
+    },
+    {
+      "id": "D2",
+      "kind": "dropped_requirement",
+      "unit_ids": ["REQ-2"],
+      "rationale": "Password reset expiration requirement is not implemented in flow"
+    },
+    {
+      "id": "D3",
+      "kind": "missing_failure_path",
+      "unit_ids": ["FLOW-1"],
+      "rationale": "Invalid credential rejection and lockout path missing from flow"
+    }
+  ]
+}

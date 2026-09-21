@@ -1,0 +1,33 @@
+{
+  "id": "case_order",
+  "snapshot": {
+    "id": "snap_order_pipeline",
+    "units": [
+      {"id": "REQ-10", "kind": "requirement", "text": "Orders must be idempotently processed within 5 seconds."},
+      {"id": "REQ-11", "kind": "requirement", "text": "Order status transitions from pending to confirmed or cancelled."},
+      {"id": "COMP-10", "kind": "component", "text": "Order processor reads messages from partitioned Kafka topic."},
+      {"id": "DATA-10", "kind": "data_rule", "text": "Database requires total_amount to equal sum of item prices."},
+      {"id": "FLOW-10", "kind": "flow", "text": "Payment service deducts inventory before charging card."}
+    ]
+  },
+  "defects": [
+    {
+      "id": "D1",
+      "kind": "contradiction",
+      "unit_ids": ["REQ-10", "FLOW-10"],
+      "rationale": "5s processing deadline contradicted by synchronous payment wait"
+    },
+    {
+      "id": "D2",
+      "kind": "missing_failure_path",
+      "unit_ids": ["FLOW-10"],
+      "rationale": "Inventory rollback path missing if payment charge fails"
+    },
+    {
+      "id": "D3",
+      "kind": "contradiction",
+      "unit_ids": ["REQ-11", "DATA-10"],
+      "rationale": "Order status cancel logic allows negative totals"
+    }
+  ]
+}
