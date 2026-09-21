@@ -10,9 +10,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
 	"github.com/wyze69-sys/SpecCouncil/internal/evidence"
+	"github.com/wyze69-sys/SpecCouncil/internal/provider"
+	"github.com/wyze69-sys/SpecCouncil/internal/provider/cline"
 	"github.com/wyze69-sys/SpecCouncil/internal/provider/fake"
 	"github.com/wyze69-sys/SpecCouncil/internal/review"
 )
@@ -37,15 +40,21 @@ func main() {
 	snapshotPath := flag.String("snapshot", "", "snapshot JSON file (omit for the built-in demo)")
 	scriptPath := flag.String("script", "", "fake-provider script JSON file (omit for the built-in demo)")
 	sessionID := flag.String("session", "demo-session", "review session id")
+	providerFlag := flag.String("provider", "", "provider to use: 'fake' (default) or 'cline'")
 	flag.Parse()
 
-	if err := run(*snapshotPath, *scriptPath, *sessionID); err != nil {
+	chosenProvider := *providerFlag
+	if chosenProvider == "" {
+		chosenProvider = os.Getenv("SPECCOUNCIL_PROVIDER")
+	}
+
+	if err := run(*snapshotPath, *scriptPath, *sessionID, chosenProvider); err != nil {
 		fmt.Fprintln(os.Stderr, "speccouncil:", err)
 		os.Exit(1)
 	}
 }
 
-func run(snapshotPath, scriptPath, sessionID string) error {
+func run(snapshotPath, scriptPath, sessionID, chosenProvider string) error {
 	var snapFile snapshotFile
 	var script scriptFile
 
@@ -70,9 +79,44 @@ func run(snapshotPath, scriptPath, sessionID string) error {
 		return err
 	}
 
-	fake := fake.NewFakeProvider(toProviderScript(script))
+	var p provider.Provider
+	var reportCallCount func()
+
+	switch chosenProvider {
+	case "", "fake":
+		fakeProv := fake.NewFakeProvider(toProviderScript(script))
+		p = fakeProv
+		reportCallCount = func() {
+			fmt.Fprintf(os.Stderr, "\nprovider calls: %d\n", len(fakeProv.Calls()))
+		}
+	case "cline":
+		keyFile := os.Getenv("SPECCOUNCIL_CLINE_KEY_FILE")
+		if keyFile == "" {
+			keyFile = ".secrets/cline_api_key"
+		}
+		data, err := os.ReadFile(keyFile)
+		if err != nil {
+			return fmt.Errorf("read cline key file %s: %w", keyFile, err)
+		}
+		apiKey := strings.TrimSpace(string(data))
+		if apiKey == "" || strings.HasPrefix(apiKey, "PLACEHOLDER") {
+			return fmt.Errorf("cline api key in %s is empty or placeholder", keyFile)
+		}
+		clineProv, err := cline.New(cline.Config{
+			BaseURL: "https://api.cline.bot/api/v1",
+			APIKey:  apiKey,
+			Model:   "deepseek/deepseek-v4.1-flash",
+		})
+		if err != nil {
+			return fmt.Errorf("init cline provider: %w", err)
+		}
+		p = clineProv
+	default:
+		return fmt.Errorf("unknown provider %q (expected 'fake' or 'cline')", chosenProvider)
+	}
+
 	engine := review.Engine{
-		Provider: fake,
+		Provider: p,
 		Budget:   review.Budget{},
 		Policy:   review.DefaultPolicy(),
 	}
@@ -88,7 +132,9 @@ func run(snapshotPath, scriptPath, sessionID string) error {
 	}
 	fmt.Println(string(encoded))
 
-	fmt.Fprintf(os.Stderr, "\nprovider calls: %d\n", len(fake.Calls()))
+	if reportCallCount != nil {
+		reportCallCount()
+	}
 	return nil
 }
 
