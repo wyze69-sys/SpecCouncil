@@ -561,3 +561,13 @@ The version is metadata recorded beside a snapshot. It is not an input to
 `evidence.Freeze` and is not part of the snapshot content hash, which continues
 to cover evidence units sorted by unit ID. Recording the version on a snapshot is
 a later slice; this note freezes the constant and its accessor only.
+
+## Snapshot build (M2-1e)
+
+`ingest.BuildSnapshot(id, source)` composes `ParseBlocks`, `AssignIDs`, and
+`AssignKinds`, then passes the ordered units to the existing `evidence.Freeze`.
+It returns the frozen snapshot with splitter version `"1"` beside it; snapshot
+hashing is unchanged. Zero parsed blocks return `ingest.ErrNoEvidenceUnits`
+before freezing. Other Freeze errors are wrapped with `%w`, and every error
+returns a zero `IngestResult`; whitespace-only code units are not repaired or
+filtered. HTTP submission wiring remains for M2-1f.
