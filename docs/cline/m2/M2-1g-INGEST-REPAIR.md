@@ -1,7 +1,10 @@
 # M2-1g — Ingestion repair: blank code blocks + real-SQLite submit proof
 
 Slice: M2-1g (repair, single commit)
-Start commit: `e605999` ("Add M2-1 verification report")
+Start commit: current `master` HEAD (`c950ec6` at release time). The code tree it
+must contain is the tree at `e605999`; the only later commits are docs-only, so
+if `git diff --stat e605999..HEAD` shows nothing outside `docs/`, the start tree
+is correct. Do not reset or rebase onto `e605999`.
 Module: `github.com/wyze69-sys/SpecCouncil`, Go 1.27.1
 Windows toolchain: `export PATH="/c/Users/User/sdk/go/bin:$PATH"` before every Go command.
 
