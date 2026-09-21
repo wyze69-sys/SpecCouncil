@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -59,6 +60,19 @@ func newCountingProvider(p provider.Provider, limit int) *countingProvider {
 	}
 }
 
+// Rates for deepseek-v4.1-flash via Cline gateway:
+// Input: ~$0.55 per 1M tokens ($0.00000055 per token).
+// Output: ~$2.19 per 1M tokens ($0.00000219 per token).
+// Arithmetic:
+// A single 50-token call (37 in, 19 out) from the smoke test computes to:
+// 37 * 0.00000055 + 19 * 0.00000219 = $0.00002035 + $0.00004161 = ~$0.000062.
+// For 60 small calls with 1024 maxTokens output ceiling:
+// 60 * 1024 * 0.00000219 (~$0.135) + ~21,000 * 0.00000055 (~$0.012) = ~$0.146.
+const (
+	ClinePricePerInputTokenUSD  = 0.00000055
+	ClinePricePerOutputTokenUSD = 0.00000219
+)
+
 func (cp *countingProvider) Call(ctx context.Context, req provider.Request) (provider.Response, error) {
 	cp.mu.Lock()
 	if cp.calls >= cp.limit {
@@ -68,15 +82,45 @@ func (cp *countingProvider) Call(ctx context.Context, req provider.Request) (pro
 	cp.calls++
 	cp.mu.Unlock()
 
-	resp, err := cp.underlying.Call(ctx, req)
-	if err == nil {
-		cp.mu.Lock()
-		cp.tokensIn += resp.TokensIn
-		cp.tokensOut += resp.TokensOut
-		// Compute cost if known, e.g. for cline model or fake ($0.0)
-		cp.mu.Unlock()
+	const maxAttempts = 3
+	var lastResp provider.Response
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		reqCopy := req
+		reqCopy.Attempt = attempt
+
+		resp, err := cp.underlying.Call(ctx, reqCopy)
+		if err == nil {
+			cp.mu.Lock()
+			cp.tokensIn += resp.TokensIn
+			cp.tokensOut += resp.TokensOut
+			if _, isFake := cp.underlying.(*fake.FakeProvider); !isFake {
+				cp.cost += float64(resp.TokensIn)*ClinePricePerInputTokenUSD + float64(resp.TokensOut)*ClinePricePerOutputTokenUSD
+			}
+			cp.mu.Unlock()
+			return resp, nil
+		}
+
+		lastResp = resp
+		lastErr = err
+
+		cat := provider.CategoryOf(err)
+		if !cat.IsRetryableTransport() {
+			// provider_rejected or non-retryable error: fail fast without retry
+			return resp, err
+		}
+
+		if attempt < maxAttempts {
+			select {
+			case <-ctx.Done():
+				return provider.Response{}, ctx.Err()
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
 	}
-	return resp, err
+
+	return lastResp, lastErr
 }
 
 func (cp *countingProvider) Calls() int {
@@ -174,6 +218,68 @@ func BuildFreeformPrompt(snap evidence.Snapshot) string {
 	return b.String()
 }
 
+// EstimateLiveCost computes the pre-run token-based cost estimate for running
+// the benchmark across cases and repeats with deepseek-v4.1-flash.
+//
+// Arithmetic:
+// For each repeat of each case, 10 calls are made:
+// - Freeform: 1 call, input = len(prompt)/4, output = maxTokens
+// - Structured: 1 call, input = len(prompt)/4, output = maxTokens
+// - Roles: 4 calls (Requirements, Architecture, QA, Security), each input = len(prompt)/4, output = maxTokens
+// - Generic: 4 calls (0..3), each input = len(prompt)/4, output = maxTokens
+// Cost per call = (input_tokens * ClinePricePerInputTokenUSD) + (maxTokens * ClinePricePerOutputTokenUSD)
+// Total calls = 10 * repeats * len(cases).
+func EstimateLiveCost(cases []Case, repeats int, maxTokens int) (float64, int) {
+	if repeats <= 0 || len(cases) == 0 {
+		return 0.0, 0
+	}
+	if maxTokens <= 0 {
+		maxTokens = 1024
+	}
+
+	var totalCost float64
+	var totalCalls int
+
+	for _, c := range cases {
+		// 1. Freeform (1 call)
+		ffPrompt := BuildFreeformPrompt(c.Snapshot)
+		inTokensFF := len(ffPrompt) / 4
+		callCostFF := float64(inTokensFF)*ClinePricePerInputTokenUSD + float64(maxTokens)*ClinePricePerOutputTokenUSD
+		totalCost += float64(repeats) * callCostFF
+		totalCalls += repeats
+
+		// 2. Structured (1 call)
+		stPrompt := BuildStructuredPrompt(c.Snapshot)
+		inTokensST := len(stPrompt) / 4
+		callCostST := float64(inTokensST)*ClinePricePerInputTokenUSD + float64(maxTokens)*ClinePricePerOutputTokenUSD
+		totalCost += float64(repeats) * callCostST
+		totalCalls += repeats
+
+		// 3. Roles (4 calls)
+		for _, role := range domain.Roles {
+			rPrompt, err := review.BuildPrompt(role, c.Snapshot)
+			var inTokens int
+			if err == nil {
+				inTokens = len(rPrompt) / 4
+			}
+			callCostRole := float64(inTokens)*ClinePricePerInputTokenUSD + float64(maxTokens)*ClinePricePerOutputTokenUSD
+			totalCost += float64(repeats) * callCostRole
+			totalCalls += repeats
+		}
+
+		// 4. Generic (4 calls)
+		for i := 0; i < 4; i++ {
+			gPrompt := BuildGenericPrompt(i, c.Snapshot)
+			inTokensG := len(gPrompt) / 4
+			callCostG := float64(inTokensG)*ClinePricePerInputTokenUSD + float64(maxTokens)*ClinePricePerOutputTokenUSD
+			totalCost += float64(repeats) * callCostG
+			totalCalls += repeats
+		}
+	}
+
+	return totalCost, totalCalls
+}
+
 // ExecuteArm executes one arm once over one case, strictly enforcing provider call budgets.
 // In M2-4a, p is a fake.FakeProvider; in M2-4b, p is the live provider adapter.
 func ExecuteArm(ctx context.Context, p provider.Provider, arm Arm, c Case, repeat int) (RunResult, error) {
@@ -208,6 +314,19 @@ func ExecuteArm(ctx context.Context, p provider.Provider, arm Arm, c Case, repea
 	}
 
 	if execErr != nil {
+		var perr *provider.Error
+		if errors.As(execErr, &perr) && perr.Category.IsRetryableTransport() {
+			return RunResult{
+				CaseID:   c.ID,
+				Arm:      arm,
+				Repeat:   repeat,
+				Latency:  latency,
+				Cost:     cp.Cost(),
+				Err:      execErr.Error(),
+				Findings: nil,
+			}, nil
+		}
+
 		return RunResult{
 			CaseID:  c.ID,
 			Arm:     arm,

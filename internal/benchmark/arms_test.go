@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
+	"github.com/wyze69-sys/SpecCouncil/internal/provider"
 	"github.com/wyze69-sys/SpecCouncil/internal/provider/fake"
 )
 
@@ -111,4 +112,184 @@ func TestArmRejectsMalformedResponses(t *testing.T) {
 			t.Errorf("error %q should mention schema_invalid", err.Error())
 		}
 	})
+}
+
+func TestArmRetryOnTransportErrorSucceeds(t *testing.T) {
+	cases := DefaultCases()
+	caseAuth := cases[0]
+	ctx := context.Background()
+
+	validBody := `{"findings":[{"id":"S1","kind":"existing","severity":"high","category":"auth","issue":"insecure token","recommendation":"use hmac","basis_refs":["REQ-1"]}]}`
+
+	script := map[domain.Role][]fake.ScriptedCall{
+		domain.Role("structured"): {
+			{TransportError: domain.ErrTransport, Message: "flaky network 500"},
+			{Body: validBody},
+		},
+	}
+	p := fake.NewFakeProvider(script)
+
+	res, err := ExecuteArm(ctx, p, ArmStructured, caseAuth, 1)
+	if err != nil {
+		t.Fatalf("expected ExecuteArm to succeed after retry; failed with: %v", err)
+	}
+	if res.Err != "" {
+		t.Fatalf("expected res.Err to be empty; got: %s", res.Err)
+	}
+	if len(res.Findings) != 1 {
+		t.Fatalf("expected 1 finding; got %d", len(res.Findings))
+	}
+	if len(p.Calls()) != 2 {
+		t.Fatalf("expected 2 provider calls (1 failed + 1 retry); got %d", len(p.Calls()))
+	}
+}
+
+func TestArmTransportErrorExhaustsRetriesContinues(t *testing.T) {
+	cases := DefaultCases()
+	caseAuth := cases[0]
+	ctx := context.Background()
+
+	script := map[domain.Role][]fake.ScriptedCall{
+		domain.Role("structured"): {
+			{TransportError: domain.ErrTransport, Message: "timeout 1"},
+			{TransportError: domain.ErrTransport, Message: "timeout 2"},
+			{TransportError: domain.ErrTransport, Message: "timeout 3"},
+		},
+	}
+	p := fake.NewFakeProvider(script)
+
+	// ExecuteArm directly: fails after 3 attempts, returns res with res.Err set, 0 findings, and nil error
+	res, err := ExecuteArm(ctx, p, ArmStructured, caseAuth, 1)
+	if err != nil {
+		t.Fatalf("expected ExecuteArm to return nil err on exhausted retries so harness continues; got: %v", err)
+	}
+	if res.Err == "" {
+		t.Fatal("expected res.Err to be non-empty")
+	}
+	if !strings.Contains(res.Err, "timeout") {
+		t.Errorf("res.Err %q should mention timeout", res.Err)
+	}
+	if len(res.Findings) != 0 {
+		t.Errorf("expected 0 findings on failed run; got %d", len(res.Findings))
+	}
+	if len(p.Calls()) != 3 {
+		t.Fatalf("expected 3 provider attempts; got %d", len(p.Calls()))
+	}
+
+	// Runner.Run: a flaky arm does NOT abort the benchmark
+	runner := NewRunner(RunnerOptions{
+		Repeats: 1,
+		Arms:    []Arm{ArmStructured},
+		ProviderFactory: func(caseID string, arm Arm, repeat int) (provider.Provider, error) {
+			return fake.NewFakeProvider(script), nil
+		},
+	})
+	scores, err := runner.Run(ctx, []Case{caseAuth})
+	if err != nil {
+		t.Fatalf("expected runner.Run to continue and complete; got error: %v", err)
+	}
+	if len(scores) != 1 {
+		t.Fatalf("expected 1 score; got %d", len(scores))
+	}
+	if scores[0].MeanRecall != 0.0 {
+		t.Errorf("expected 0.0 mean recall for failed arm; got %f", scores[0].MeanRecall)
+	}
+}
+
+func TestArmProviderRejectedNotRetriedRunStops(t *testing.T) {
+	cases := DefaultCases()
+	caseAuth := cases[0]
+	ctx := context.Background()
+
+	script := map[domain.Role][]fake.ScriptedCall{
+		domain.Role("structured"): {
+			{TransportError: domain.ErrProviderRejected, Message: "unauthorized 401"},
+			{Body: `{"findings":[]}`}, // second call should never be reached
+		},
+	}
+	p := fake.NewFakeProvider(script)
+
+	res, err := ExecuteArm(ctx, p, ArmStructured, caseAuth, 1)
+	if err == nil {
+		t.Fatal("expected ExecuteArm to fail immediately on provider_rejected; got nil error")
+	}
+	if res.Err == "" {
+		t.Fatal("expected res.Err to be non-empty")
+	}
+	if len(p.Calls()) != 1 {
+		t.Fatalf("expected exactly 1 provider call (no retries); got %d", len(p.Calls()))
+	}
+
+	// Runner.Run must abort on provider_rejected
+	runner := NewRunner(RunnerOptions{
+		Repeats: 1,
+		Arms:    []Arm{ArmStructured},
+		ProviderFactory: func(caseID string, arm Arm, repeat int) (provider.Provider, error) {
+			return fake.NewFakeProvider(script), nil
+		},
+	})
+	_, rErr := runner.Run(ctx, []Case{caseAuth})
+	if rErr == nil {
+		t.Fatal("expected runner.Run to abort on provider_rejected; got nil error")
+	}
+}
+
+func TestTokenBasedEstimateUnderDefaultCap(t *testing.T) {
+	cases := DefaultCases()
+	estCost, totalCalls := EstimateLiveCost(cases, 3, 1024)
+
+	// 2 cases * 3 repeats * 10 calls/repeat = 60 calls
+	if totalCalls != 60 {
+		t.Errorf("expected 60 calls; got %d", totalCalls)
+	}
+	if estCost <= 0.0 {
+		t.Errorf("expected estimate > 0.0; got $%.4f", estCost)
+	}
+	if estCost >= 0.50 {
+		t.Errorf("expected estimate < $0.50 default cap; got $%.4f", estCost)
+	}
+	t.Logf("60-call token-based estimate: $%.4f for %d calls", estCost, totalCalls)
+}
+
+type mockRealProvider struct {
+	tokensIn  int
+	tokensOut int
+}
+
+func (m *mockRealProvider) Call(ctx context.Context, req provider.Request) (provider.Response, error) {
+	return provider.Response{
+		Body:      []byte(`{"findings":[]}`),
+		Model:     "deepseek/deepseek-v4.1-flash",
+		TokensIn:  m.tokensIn,
+		TokensOut: m.tokensOut,
+	}, nil
+}
+
+func TestCountingProviderTelemetryCost(t *testing.T) {
+	ctx := context.Background()
+
+	// Fake provider: cost is always $0.0
+	fakeP := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
+		domain.Role("test"): {{Body: `{"findings":[]}`}},
+	})
+	cpFake := newCountingProvider(fakeP, 1)
+	_, err := cpFake.Call(ctx, provider.Request{Role: "test"})
+	if err != nil {
+		t.Fatalf("fake call failed: %v", err)
+	}
+	if cpFake.Cost() != 0.0 {
+		t.Errorf("expected fake provider cost $0.0; got $%.6f", cpFake.Cost())
+	}
+
+	// Real provider mock: cost estimated from tokens
+	mockP := &mockRealProvider{tokensIn: 1000, tokensOut: 500}
+	cpReal := newCountingProvider(mockP, 1)
+	_, err = cpReal.Call(ctx, provider.Request{Role: "test"})
+	if err != nil {
+		t.Fatalf("real call failed: %v", err)
+	}
+	expectedCost := float64(1000)*ClinePricePerInputTokenUSD + float64(500)*ClinePricePerOutputTokenUSD
+	if cpReal.Cost() != expectedCost {
+		t.Errorf("expected real provider cost $%.6f; got $%.6f", expectedCost, cpReal.Cost())
+	}
 }
