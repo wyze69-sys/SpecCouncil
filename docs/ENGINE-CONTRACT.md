@@ -150,6 +150,36 @@ Those remain separate later slices, so the HTTP nil-snapshot blocker described
 under `Snapshot` is NOT closed by M2-1a and stays open until ingestion is wired
 end to end.
 
+### Evidence unit IDs (M2-1b)
+
+Package `internal/ingest` assigns stable, deterministic unit IDs to the parsed
+blocks, satisfying the non-empty and unique-per-snapshot `Unit.ID` rules that
+`evidence.Freeze` enforces later:
+
+- `AssignIDs(blocks []Block) []IdentifiedBlock` returns `(ID, Block)` pairs in
+  input order; `out[i].Block` is the input block unchanged, and block text is
+  never mutated.
+- An author ID token at the very start of `Block.Text` is preserved verbatim,
+  including case: one ASCII letter, then zero or more ASCII letters or digits,
+  then a hyphen, then one or more digits, immediately followed by end of text, a
+  space, a tab, a colon, a period, or a `)`. So `REQ-12`, `FR-034:`, `NFR-6 `,
+  `AC-17)`, and `REQ-12` at end of text are preserved, while `REQ12`, `-12`,
+  `REQ-`, `REQ-12abc`, and `REQ-12-2` are not.
+- `BlockCode` blocks are never scanned for an author ID, because their text is
+  verbatim program text; every code block uses a generated ID.
+- Every other block gets the generated ID `u` + `Block.Order` (`u0`, `u1`, ...),
+  so every ID is non-empty.
+- Duplicate base IDs are disambiguated in input order with the smallest free
+  integer suffix `-2`, `-3`, ...; the first occurrence stays bare, and a literal
+  of the same base already quoting a suffix is skipped rather than reused.
+- The function is pure: no clock, filesystem, network, randomness, map-iteration
+  order, or import of another internal package. Empty input returns a non-nil
+  empty slice `[]IdentifiedBlock{}`.
+
+This slice still maps no `evidence.UnitKind` (M2-1c), declares no splitter
+version (M2-1d), builds no `evidence.Snapshot` (M2-1e), and adds no HTTP wiring
+(M2-1f), so the HTTP nil-snapshot blocker above stays open.
+
 ### SQLite connection foundation
 
 Package `internal/storage/sqlite` provides the verified pure-Go SQLite connection foundation:
