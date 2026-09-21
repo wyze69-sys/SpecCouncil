@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1325,5 +1326,164 @@ func TestSupervise_ConcurrentCompletionNotificationsSerialized(t *testing.T) {
 	}
 	if res == nil || !res.IsComposed() {
 		t.Fatal("expected session composed")
+	}
+}
+
+// 26. End-to-end proof of the v2 finding contract: fake provider -> SuperviseSession -> SQLite publish -> ReadReportScoped.
+func TestSupervise_V2FindingContractSurvivesToReport(t *testing.T) {
+	store, _ := openTestStore(t)
+	policy := standardTimingPolicy()
+	claimRes, snap := submitAndClaimSession(t, store, "sess_v2_contract_proof", "proj_test", policy)
+
+	reqBody := `{"findings":[{"id":"R-1","kind":"existing","severity":"high","category":"correctness","issue":"Unvalidated state in requirements.","recommendation":"Validate state in requirements.","basis_refs":["unit_1"]}]}`
+	archBody := `{"findings":[{"id":"A-1","kind":"conflicting","severity":"high","category":"architecture","issue":"Contradiction between unit_1 and unit_2.","recommendation":"Resolve design contradiction.","basis_refs":["unit_1","unit_2"]}]}`
+	qaBody := `{"findings":[{"id":"Q-1","kind":"missing","severity":"medium","category":"coverage","issue":"No acceptance test for the cancel path.","recommendation":"Add an acceptance test that cancels an in-flight booking.","basis_refs":[],"anchor_ref":"unit_2"}]}`
+	secBody := `{"findings":[{"id":"S-1","kind":"missing","severity":"critical","category":"security","issue":"Missing security audit log on cancel.","recommendation":"Emit audit log on cancel action.","basis_refs":["unit_1"],"anchor_ref":"unit_2"}]}`
+
+	fake := fake.NewFakeProvider(map[domain.Role][]fake.ScriptedCall{
+		domain.RoleRequirements: {successScript(reqBody)},
+		domain.RoleArchitecture: {successScript(archBody)},
+		domain.RoleQA:           {successScript(qaBody)},
+		domain.RoleSecurity:     {successScript(secBody)},
+	})
+
+	cfg := worker.SuperviseSessionConfig[
+		*sqlite.DispatchReservationResult,
+		*sqlite.SessionStatus,
+		sqlite.PublishSuccessParams,
+		sqlite.PublishFailureParams,
+		*sqlite.PublishResult,
+		*sqlite.ComposeResult,
+	]{
+		SessionID:          claimRes.SessionID,
+		ProjectID:          claimRes.ProjectID,
+		SnapshotID:         claimRes.SnapshotID,
+		Snapshot:           snap,
+		Provider:           fake,
+		CallTimeout:        policy.CallTimeout,
+		HardDeadlineAt:     claimRes.HardDeadlineAt,
+		DispatchCutoffAt:   claimRes.DispatchCutoffAt,
+		TickInterval:       10 * time.Millisecond,
+		ReservationStore:   store,
+		StatusReader:       store,
+		PublicationStore:   store,
+		Composer:           store,
+		SnapshotReader:     store,
+		BuildSuccessParams: standardPublishSuccessParamsBuilder,
+		BuildFailureParams: standardPublishFailureParamsBuilder,
+	}
+
+	res, err := worker.SuperviseSession(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("SuperviseSession failed: %v", err)
+	}
+	if res == nil || !res.IsComposed() {
+		t.Fatal("expected session to be composed")
+	}
+
+	// 1. worker.SuperviseSession returns a composed result; store.ReadStatus shows SessionComplete and CompletedRoleCount == 4.
+	st, err := store.ReadStatus(context.Background(), claimRes.SessionID)
+	if err != nil {
+		t.Fatalf("ReadStatus failed: %v", err)
+	}
+	if st.Status != domain.SessionComplete {
+		t.Fatalf("expected session complete, got: %s", st.Status)
+	}
+	if st.CompletedRoleCount != 4 {
+		t.Fatalf("expected 4 completed roles, got: %d", st.CompletedRoleCount)
+	}
+
+	// 2. Re-read the terminal report through the store, not just res.TerminalReport():
+	// call store.ReadReportScoped(ctx, projectID, sessionID) and use that report for every field assertion.
+	ctx := context.Background()
+	rep, err := store.ReadReportScoped(ctx, claimRes.ProjectID, claimRes.SessionID)
+	if err != nil {
+		t.Fatalf("ReadReportScoped failed: %v", err)
+	}
+	if rep == nil {
+		t.Fatal("expected non-nil reconstructed terminal report from store")
+	}
+
+	// 3. The report has exactly 4 findings.
+	if len(rep.Findings) != 4 {
+		t.Fatalf("expected 4 findings, got: %d", len(rep.Findings))
+	}
+
+	// 4. Find each finding by its role and assert its Kind and AnchorRef:
+	// - requirements finding: Kind == domain.FindingExisting, AnchorRef == "".
+	// - architecture finding: Kind == domain.FindingConflicting, AnchorRef == "", len(BasisRefs) == 2.
+	// - QA finding: Kind == domain.FindingMissing, AnchorRef == "unit_2", len(BasisRefs) == 0.
+	// - security finding: Kind == domain.FindingMissing, AnchorRef == "unit_2", BasisRefs == ["unit_1"].
+	findingsByRole := make(map[domain.Role]review.ReportFinding, len(rep.Findings))
+	for _, rf := range rep.Findings {
+		findingsByRole[rf.Role] = rf
+	}
+
+	reqFinding, ok := findingsByRole[domain.RoleRequirements]
+	if !ok {
+		t.Fatal("missing requirements finding in reconstructed report")
+	}
+	if reqFinding.Finding.Kind != domain.FindingExisting {
+		t.Errorf("requirements finding kind = %q, want %q", reqFinding.Finding.Kind, domain.FindingExisting)
+	}
+	if reqFinding.Finding.AnchorRef != "" {
+		t.Errorf("requirements finding anchor_ref = %q, want empty", reqFinding.Finding.AnchorRef)
+	}
+	if len(reqFinding.Finding.BasisRefs) != 1 || reqFinding.Finding.BasisRefs[0] != "unit_1" {
+		t.Errorf("requirements finding basis_refs = %v, want [\"unit_1\"]", reqFinding.Finding.BasisRefs)
+	}
+
+	archFinding, ok := findingsByRole[domain.RoleArchitecture]
+	if !ok {
+		t.Fatal("missing architecture finding in reconstructed report")
+	}
+	if archFinding.Finding.Kind != domain.FindingConflicting {
+		t.Errorf("architecture finding kind = %q, want %q", archFinding.Finding.Kind, domain.FindingConflicting)
+	}
+	if archFinding.Finding.AnchorRef != "" {
+		t.Errorf("architecture finding anchor_ref = %q, want empty", archFinding.Finding.AnchorRef)
+	}
+	if len(archFinding.Finding.BasisRefs) != 2 {
+		t.Errorf("architecture finding len(basis_refs) = %d, want 2", len(archFinding.Finding.BasisRefs))
+	}
+	if !reflect.DeepEqual(archFinding.Finding.BasisRefs, []string{"unit_1", "unit_2"}) {
+		t.Errorf("architecture finding basis_refs = %v, want [\"unit_1\", \"unit_2\"]", archFinding.Finding.BasisRefs)
+	}
+
+	qaFinding, ok := findingsByRole[domain.RoleQA]
+	if !ok {
+		t.Fatal("missing QA finding in reconstructed report")
+	}
+	if qaFinding.Finding.Kind != domain.FindingMissing {
+		t.Errorf("QA finding kind = %q, want %q", qaFinding.Finding.Kind, domain.FindingMissing)
+	}
+	if qaFinding.Finding.AnchorRef != "unit_2" {
+		t.Errorf("QA finding anchor_ref = %q, want \"unit_2\"", qaFinding.Finding.AnchorRef)
+	}
+	if len(qaFinding.Finding.BasisRefs) != 0 {
+		t.Errorf("QA finding len(basis_refs) = %d, want 0", len(qaFinding.Finding.BasisRefs))
+	}
+
+	secFinding, ok := findingsByRole[domain.RoleSecurity]
+	if !ok {
+		t.Fatal("missing security finding in reconstructed report")
+	}
+	if secFinding.Finding.Kind != domain.FindingMissing {
+		t.Errorf("security finding kind = %q, want %q", secFinding.Finding.Kind, domain.FindingMissing)
+	}
+	if secFinding.Finding.AnchorRef != "unit_2" {
+		t.Errorf("security finding anchor_ref = %q, want \"unit_2\"", secFinding.Finding.AnchorRef)
+	}
+	if len(secFinding.Finding.BasisRefs) != 1 || secFinding.Finding.BasisRefs[0] != "unit_1" {
+		t.Errorf("security finding basis_refs = %v, want [\"unit_1\"]", secFinding.Finding.BasisRefs)
+	}
+
+	// 5. Determinism: read the report a second time and assert reflect.DeepEqual of the two reads.
+	rep2, err := store.ReadReportScoped(ctx, claimRes.ProjectID, claimRes.SessionID)
+	if err != nil {
+		t.Fatalf("second ReadReportScoped failed: %v", err)
+	}
+	if !reflect.DeepEqual(rep, rep2) {
+		t.Fatalf("expected reconstructed reports to be deeply equal across reads:\nfirst:  %+v\nsecond: %+v", rep, rep2)
 	}
 }

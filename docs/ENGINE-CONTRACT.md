@@ -78,18 +78,26 @@ raw body
   -> trusted ReviewerResult
 ```
 
-Enforced bounds: at most 15 findings; 1–5 unique basis refs per finding; issue
-and recommendation non-empty and at most 1000 characters; unique finding ids.
-An empty findings list is valid.
+Enforced bounds: at most 15 findings; issue and recommendation non-empty and at
+most 1000 characters; unique finding ids. An empty findings list is valid.
+Every finding has a `kind` of `existing`, `conflicting`, or `missing`:
+- `existing`: 1–5 unique basis refs;
+- `conflicting`: 2–5 unique basis refs;
+- `missing`: 0–5 unique basis refs and exactly one `anchor_ref`.
 
-This validation proves structural conformance and citation existence only. It
-does not prove that cited text supports a finding, that a finding is correct, or
-that the review is complete. The current output also has no explicit omission
-claim type; requiring 1–5 references can pressure a provider to cite nearby text
-for something the design does not state. M2 must freeze and benchmark the
-experimental finding/citation schema before the real adapter is accepted.
-Substring-checked excerpts may be evaluated as traceability evidence, but they
-must not be described as semantic verification.
+`anchor_ref` is allowed only for `missing` and names the unit the omission is
+about.
+
+This validation proves structural conformance and citation existence only (that
+referenced basis units and anchor units exist). It does not prove that cited
+text supports a finding, that an anchor is valid, that a finding is correct, or
+that the review is complete. The `missing` kind removes the pressure where
+requiring 1–5 references could pressure a provider to cite nearby text for
+something the design does not state: an omission cites zero basis refs and
+instead names the section it is about via `anchor_ref`. M2 must freeze and
+benchmark the experimental finding/citation schema before the real adapter is
+accepted. Substring-checked excerpts may be evaluated as traceability evidence,
+but they must not be described as semantic verification.
 
 ### Two-call provider budget
 
@@ -123,6 +131,9 @@ Current deterministic finding order is:
 ```text
 severity rank, role rank, primary basis_ref, category, finding id
 ```
+
+Where `primary basis_ref` falls back to the `anchor_ref` when a finding has no
+basis refs, so omission findings still sort deterministically.
 
 A failed or interrupted role contributes zero findings.
 
@@ -253,7 +264,7 @@ Package `internal/storage/sqlite` provides the verified core production schema v
 - `evidence_units`: addressable design segments with foreign key to snapshot (`ON DELETE CASCADE`), stable unit ID, non-negative ordinal, canonical kind (`brief`, `requirement`, `component`, `flow`, `constraint`, `data_rule`), non-empty text, and unique `(snapshot_id, unit_id)` and `(snapshot_id, ordinal)`.
 - `sessions`: review session entity with project ID, idempotency key, request hash, foreign key to snapshot (`ON DELETE RESTRICT`), canonical status (`queued`, `reviewing`, `complete`, `partial`, `failed`), `cancel_requested` boolean (0/1), timing deadlines (`dispatch_cutoff_at`, `hard_deadline_at`), terminal reason, completed/incomplete role counts (`completed_role_count + incomplete_role_count = 4`), timestamps, unique `(project_id, idempotency_key)`, and valid state-dependent null/non-null column checks.
 - `role_runs`: per-role execution tracking with foreign key to session (`ON DELETE CASCADE`), canonical role (`requirements`, `architecture`, `qa`, `security`), canonical status (`pending`, `in_flight`, `complete`, `failed`, `interrupted`), interruption cause, error category, call count (0..2), timestamps, unique `(session_id, role)`, and valid status/cause/error checks.
-- `findings`: reviewer findings with foreign key to role run (`ON DELETE CASCADE`), stable finding ID, canonical severity (`critical`, `high`, `medium`, `low`), category, length-bounded issue (<= 1000 chars) and recommendation (<= 1000 chars), created timestamp, and unique `(role_run_id, finding_id)`.
+- `findings`: reviewer findings with foreign key to role run (`ON DELETE CASCADE`), stable finding ID, canonical kind (`kind` with CHECK in `existing`, `conflicting`, `missing`), canonical severity (`critical`, `high`, `medium`, `low`), category, length-bounded issue (<= 1000 chars) and recommendation (<= 1000 chars), nullable `anchor_unit_id` (foreign key to `evidence_units`, `ON DELETE RESTRICT`), created timestamp, and unique `(role_run_id, finding_id)`.
 - `finding_basis_refs`: citation links from findings to evidence units with foreign key to finding (`ON DELETE CASCADE`), foreign key to evidence unit (`ON DELETE RESTRICT`), positive ordinal (1..5), and unique `(finding_id, evidence_unit_id)` and `(finding_id, ordinal)`.
 
 ### SQLite state, citation, and immutability guards
@@ -285,7 +296,7 @@ Package `internal/storage/sqlite` provides verified read-only status and termina
 
 - `Read-only pool execution`: status, report, and snapshot queries execute exclusively through the dedicated `mode=ro` pool via `SELECT` statements; no write transaction, mutation, provider, composer, or worker invocation is allowed.
 - `Scoped typed errors`: missing sessions return a typed `SessionNotFoundError` matching `ErrNotFound` and `ErrSessionNotFound`, preserving `ProjectID` scoping for 404 mapping; report requests on non-terminal sessions (`queued`, `reviewing`) fail closed with `SessionNotTerminalError` matching `ErrNotTerminal` and `ErrNotFinished`.
-- `Deterministic reconstruction`: role ordering is reconstructed strictly from canonical `domain.Roles` (`requirements`, `architecture`, `qa`, `security`) rather than database row order; findings are sorted by deterministic total order (`severity rank`, `role rank`, `primary basis_ref`, `category`, `finding id`); finding basis references are ordered strictly by positive ordinal `1..5`.
+- `Deterministic reconstruction`: role ordering is reconstructed strictly from canonical `domain.Roles` (`requirements`, `architecture`, `qa`, `security`) rather than database row order; findings are sorted by deterministic total order (`severity rank`, `role rank`, `primary basis_ref`, `category`, `finding id`), where `primary basis_ref` falls back to the `anchor_ref` when a finding has no basis refs so omission findings still sort deterministically; finding basis references are ordered strictly by positive ordinal `1..5`.
 - `Persisted field preservation`: `cancel_requested`, `status`, `terminal_reason`, `completed_role_count`, and `incomplete_role_count` are returned exactly as committed in storage without verdict composition or re-derivation from live flags.
 - `Filtered role findings`: failed and interrupted roles contribute zero findings to terminal reports.
 - `Snapshot hash integrity`: `ReadSnapshot` reconstructs ordered evidence units, recomputes canonical hash via `evidence.Freeze`, and fails closed with `ErrSnapshotCorrupted` on mismatch.
@@ -340,8 +351,8 @@ Package `internal/storage/sqlite` provides verified atomic, compare-and-set role
 - `Atomic failure publication`: atomically transitions the role run from `in_flight` to `failed`, recording canonical error category, error message, call count (0..2), and `completed_at`; inserts zero findings or basis references.
 - `Late, duplicate, and stale rejection`: returns a typed `PublicationConflictError` matching `ErrPublicationConflict` when encountering non-in-flight roles (stale `pending`, duplicate or late `complete`/`failed`/`interrupted`); makes zero modifications.
 - `Terminal role state immutability`: terminal role states (`complete`, `failed`, `interrupted`) are never overwritten or transitioned.
-- `Input validation and ordering enforcement`: strictly validates findings and basis references before and during execution; enforces at most 15 findings, non-empty and unique finding IDs, canonical severities, non-empty categories, bounded issue/recommendation (1..1000 characters), 1..5 basis refs per finding, unique basis refs within a finding, and 1-indexed basis ordinals.
-- `Snapshot citation integrity`: verifies all cited basis references exist in the session's frozen snapshot as evidence units, rejecting unknown citations and cross-snapshot citations.
+- `Input validation and ordering enforcement`: strictly validates findings, basis references, and anchor references before and during execution; enforces at most 15 findings, non-empty and unique finding IDs, canonical kind (`existing`, `conflicting`, `missing`), canonical severities, non-empty categories, bounded issue/recommendation (1..1000 characters), kind-aware basis refs (1..5 for `existing`, 2..5 for `conflicting`, 0..5 for `missing`), unique basis refs within a finding, 1-indexed basis ordinals, and anchor rules (exactly one `anchor_ref` for `missing`, none allowed for `existing` or `conflicting`). Guarded in SQLite by three insert triggers from migration 007: `findings_missing_requires_anchor`, `findings_anchor_only_for_missing`, and `findings_anchor_snapshot_guard`.
+- `Snapshot citation integrity`: verifies all cited basis references and anchor references exist in the session's frozen snapshot as evidence units, rejecting unknown citations, unknown anchors, and cross-snapshot citations.
 - `All-or-nothing transaction rollback`: validation failures, constraint violations, or commit errors abort and roll back the transaction completely, preserving the role in `in_flight` and inserting no findings or references.
 - `Strict persistence scope and field preservation`: preserves snapshot rows and all session fields (`status`, `cancel_requested`, `completed_role_count`, `incomplete_role_count`, `terminal_reason`, timestamps) without modification; never composes session verdicts or invokes providers, workers, HTTP, or composer logic.
 
@@ -366,7 +377,7 @@ Package `internal/storage/sqlite` provides verified atomic, idempotent transacti
 - `Immediate transaction execution`: composes a terminal session within a single dedicated immediate transaction using `withImmediate`, serializing mutations on the writer pool and honoring bounded busy retries.
 - `Non-terminal refusal`: reads all four committed role runs, findings, and citations inside the transaction; refuses composition unless all four roles are terminal and zero in-flight or pending roles remain; returns typed `SessionNotReadyError` matching `ErrSessionNotReady` and makes zero writes. Queued sessions are refused without modification.
 - `Canonical verdict rules and reason precedence`: applies frozen `review.Compose` rules deriving status (`complete`, `partial`, `failed`) and terminal reason (`all_roles_complete`, `user_cancelled`, `process_restart`, `deadline_cutoff`, `role_failures`) strictly from committed role runs.
-- `Deterministic total ordering`: report findings and citations follow the deterministic order (`severity rank, role rank, primary basis_ref, category, finding id`) and ordinal ascending links. Failed and interrupted roles contribute zero findings.
+- `Deterministic total ordering`: report findings and citations follow the deterministic order (`severity rank, role rank, primary basis_ref, category, finding id`, where `primary basis_ref` falls back to `anchor_ref` when basis refs are empty) and ordinal ascending links. Failed and interrupted roles contribute zero findings.
 - `Compare-and-set terminal transition`: atomically updates `sessions` requiring status to remain `reviewing`, recording status, terminal reason, completed/incomplete counts, and UTC RFC3339Nano `terminal_at`.
 - `Idempotency and concurrency safety`: duplicate composition is an idempotent read of the committed terminal state returning `AlreadyTerminal: true` without mutating data or timestamps. Stale concurrent composers lose compare-and-set without overwriting terminal state.
 - `All-or-nothing transaction rollback`: injected commit errors or malformed persisted role data abort and roll back completely; no partial terminal state is persisted.
