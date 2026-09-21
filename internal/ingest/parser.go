@@ -48,6 +48,10 @@ type Block struct {
 // Classification reads a TrimSpace-normalized copy of each line while paragraph
 // text keeps the line's own bytes so that interior indentation survives. "Blank"
 // and "trimmed" always mean Go strings.TrimSpace semantics.
+//
+// A fenced code block whose text is blank under strings.TrimSpace (for example
+// "```\n   \n```") emits no block at all, matching every other block kind; a
+// code block that does emit keeps its own bytes untrimmed.
 func ParseBlocks(content string) []Block {
 	blocks := []Block{}
 	paragraph := make([]string, 0, 4)
@@ -85,8 +89,11 @@ func ParseBlocks(content string) []Block {
 				inner = append(inner, lines[i]) // code is significant: no trimming
 			}
 			// An unterminated fence leaves i == len(lines), so every remaining
-			// line is part of this block and the loop ends after it.
-			if text := strings.Join(inner, "\n"); text != "" {
+			// line is part of this block and the loop ends after it. A block
+			// whose text is blank under TrimSpace (for example "```\n   \n```")
+			// emits nothing, exactly like a byte-empty fence; emitted code text
+			// still keeps its own bytes.
+			if text := strings.Join(inner, "\n"); strings.TrimSpace(text) != "" {
 				blocks = append(blocks, Block{
 					Kind:  BlockCode,
 					Text:  text,

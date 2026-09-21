@@ -276,6 +276,37 @@ func codeCases() []doc {
 			want:  []ingest.Block{},
 		},
 		{
+			name:  "whitespace-only code interior emits nothing",
+			input: "```\n   \n```\n",
+			want:  []ingest.Block{},
+		},
+		{
+			name:  "tab-and-space code interior emits nothing",
+			input: "```\n	 \n```\n",
+			want:  []ingest.Block{},
+		},
+		{
+			name:  "leading code interior whitespace survives when real code is present",
+			input: "```\n   \ncode\n```\n",
+			want: []ingest.Block{
+				b(ingest.BlockCode, "   \ncode", 0),
+			},
+		},
+		{
+			name:  "trailing code interior whitespace survives",
+			input: "```\ncode\n   \n```\n",
+			want: []ingest.Block{
+				b(ingest.BlockCode, "code\n   ", 0),
+			},
+		},
+		{
+			name:  "a whitespace-only fence consumes no order",
+			input: "```\n   \n```\n# H\n",
+			want: []ingest.Block{
+				b(ingest.BlockHeading, "H", 0),
+			},
+		},
+		{
 			name:  "code fence is a paragraph boundary on both sides",
 			input: "before\n```\ncode\n```\nafter\n",
 			want: []ingest.Block{
@@ -306,6 +337,8 @@ func TestParseBlocksEmitsNothingForMarkersWithoutContent(t *testing.T) {
 		"```",
 		"```\n```",
 		"```   \n```",
+		"```\n   \n```",
+		"```\n	\n```",
 	}
 	for _, input := range inputs {
 		got := ingest.ParseBlocks(input)

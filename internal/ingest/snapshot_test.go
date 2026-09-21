@@ -16,7 +16,7 @@ func TestBuildSnapshotHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Snapshot.ID != "snap-1" || got.Snapshot.Hash == "" || got.SplitterVersion != "1" {
+	if got.Snapshot.ID != "snap-1" || got.Snapshot.Hash == "" || got.SplitterVersion != "2" {
 		t.Fatalf("unexpected snapshot metadata: %+v", got)
 	}
 	blocks := ingest.ParseBlocks(snapshotSource)
@@ -41,7 +41,7 @@ func TestBuildSnapshotHappyPath(t *testing.T) {
 }
 
 func TestBuildSnapshotNoEvidenceUnits(t *testing.T) {
-	for _, source := range []string{"", "   ", "\n\n", "-\n*\n1.\n```\n```"} {
+	for _, source := range []string{"", "   ", "\n\n", "-\n*\n1.\n```\n```", "```\n   \n```", "```\n	 \n```"} {
 		for _, id := range []string{"snap-1", ""} {
 			t.Run(id+"/"+source, func(t *testing.T) {
 				got, err := ingest.BuildSnapshot(id, source)
@@ -56,13 +56,29 @@ func TestBuildSnapshotNoEvidenceUnits(t *testing.T) {
 	}
 }
 
+// TestBuildSnapshotIgnoresBlankCodeBlocks pins the D1 repair: a fenced code
+// block whose text is blank under TrimSpace is not evidence, so a document that
+// also holds real content still builds and the blank block never becomes a unit.
+func TestBuildSnapshotIgnoresBlankCodeBlocks(t *testing.T) {
+	got, err := ingest.BuildSnapshot("snap-mixed", "# Title\n\n```\n   \n```")
+	if err != nil {
+		t.Fatalf("BuildSnapshot returned an error for blank-code content: %v", err)
+	}
+	want := []evidence.Unit{{ID: "u0", Kind: evidence.UnitBrief, Text: "Title"}}
+	if !reflect.DeepEqual(got.Snapshot.Units, want) {
+		t.Fatalf("units = %+v, want %+v", got.Snapshot.Units, want)
+	}
+	if got.Snapshot.Hash == "" || !got.Snapshot.HasRef("u0") {
+		t.Fatalf("snapshot is not frozen and addressable: %+v", got.Snapshot)
+	}
+}
+
 func TestBuildSnapshotFreezeErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name, id, source, message string
 	}{
 		{"empty id", "", "Valid evidence", "evidence: snapshot id must not be empty"},
 		{"blank id", "  ", "Valid evidence", "evidence: snapshot id must not be empty"},
-		{"blank code text", "snap-1", "```\n   \n```", "evidence: unit \"u0\" has empty text"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := ingest.BuildSnapshot(tc.id, tc.source)

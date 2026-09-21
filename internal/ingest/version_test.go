@@ -9,8 +9,8 @@ import (
 // TestSplitterVersionIsExactLiteral pins the recorded version string itself, so
 // a value change cannot pass as an implementation detail.
 func TestSplitterVersionIsExactLiteral(t *testing.T) {
-	if ingest.SplitterVersion != "1" {
-		t.Fatalf("SplitterVersion = %q, want %q", ingest.SplitterVersion, "1")
+	if ingest.SplitterVersion != "2" {
+		t.Fatalf("SplitterVersion = %q, want %q", ingest.SplitterVersion, "2")
 	}
 }
 
@@ -21,8 +21,8 @@ func TestSplitterReturnsSplitterVersion(t *testing.T) {
 	if got := ingest.Splitter(); got != ingest.SplitterVersion {
 		t.Errorf("Splitter() = %q, want SplitterVersion %q", got, ingest.SplitterVersion)
 	}
-	if got := ingest.Splitter(); got != "1" {
-		t.Errorf("Splitter() = %q, want %q", got, "1")
+	if got := ingest.Splitter(); got != "2" {
+		t.Errorf("Splitter() = %q, want %q", got, "2")
 	}
 }
 
