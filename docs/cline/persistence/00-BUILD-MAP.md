@@ -288,6 +288,32 @@ Rationale: we must prove whether four roles are better than one strong call.
 Forbidden: shipping the benchmark harness as product behavior; changing the v1
 runtime to make an arm look better.
 
+#### Optional second-layer checker (Jev / typed-decision model) — experimental
+
+Candidate add-on, NOT core engine behavior. After Layer 1 (the generative roles)
+writes findings, an optional Layer 2 could take each finding plus its cited
+evidence and return a typed decision such as "cited evidence supports this
+finding: yes/no" with a calibrated confidence score. TypeSafe AI's Jev is the
+current candidate for this layer (typed output, cheap, fast; it does not generate
+prose, so it cannot write findings itself).
+
+Rules if this is tried:
+
+- It lives behind the provider boundary as an optional checker; the engine and
+  every automated test MUST still run and pass with the checker absent.
+- Its output is a model judgment, not proof. No trust language ("verified",
+  "proven") may attach to a finding because Layer 2 scored it. It may only
+  annotate or down-rank, never certify.
+- It is a validation experiment first: evaluate it as an extra condition inside
+  the M2-4 benchmark (does adding Layer 2 reduce false findings / unsupported
+  citations without cutting real defect recall?) before any product wiring.
+- Do NOT make it a hard dependency, and do NOT let it replace the M2-2 citation
+  contract, which is the primary hallucination control.
+
+Timing decision (owned by Hermes): defer wiring until M2-1 and M2-2 are complete;
+then test as an M2-4 arm/condition. Only promote to product if the benchmark
+shows it meaningfully cuts unsupported findings.
+
 ### M2-5 — Concierge change-review experiment (validation system)
 
 Manually test the future workflow with real users:
