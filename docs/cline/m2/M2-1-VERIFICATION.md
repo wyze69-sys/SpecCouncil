@@ -1,7 +1,8 @@
 # M2-1 Verification Report — Deterministic Evidence Ingestion
 
-Status: **PASS**. All six slices complete, independently verified against the
-working tree on this machine. Nothing pushed.
+Status: **PASS for the six implementation slices; M2-1 NOT yet accepted as a
+whole** — an independent audit found one client-input defect and one missing
+end-to-end proof, both scoped to the M2-1g repair packet. Nothing pushed.
 
 - Verified at HEAD: `f22b2b1`
 - Module: `github.com/wyze69-sys/SpecCouncil`, Go 1.27.1
@@ -41,7 +42,7 @@ From the M2 spec and build map, deterministic evidence ingestion must:
 | 1 | Five block kinds parsed | `internal/ingest/parser.go` | `TestParseBlocksClassifiesLineOrientedCases`, `TestParseBlocksOrderIsGapFreeAcrossAllKinds` |
 | 2 | Author IDs preserved (`REQ-12`) | `internal/ingest/ids.go` | `TestAssignIDsContractExamples`, `TestAssignIDsMixedDocumentUsesAuthorIdsAndGeneratedIds`; end-to-end `TestBuildSnapshotHappyPath`, `TestSnapshotProvider_BuildsValidSnapshot` (`HasRef("REQ-12")`) |
 | 3 | Valid `UnitKind` per unit | `internal/ingest/kinds.go` | `TestMapBlockKindKnownKinds`, `TestMapBlockKindKnownKindsAreValid`, `TestMapBlockKindUnknownIsInvalid` |
-| 4 | Splitter version recorded | `internal/ingest/version.go` | `TestSplitterVersionIsExactLiteral`, `TestSplitterReturnsSplitterVersion`, `TestSplitterVersionIsNonEmpty` |
+| 4 | Splitter version defined (`"1"` at M2-1; `"2"` after M2-1g) | `internal/ingest/version.go` | `TestSplitterVersionIsExactLiteral`, `TestSplitterReturnsSplitterVersion`, `TestSplitterVersionIsNonEmpty`. **Not persisted** — see limitations. |
 | 5 | Deterministic output | all slices | `TestParseBlocksIsDeterministic`, `TestAssignIDsIsDeterministic`, `TestAssignKindsIsDeterministic`, `TestBuildSnapshotDeterminism`, `TestSnapshotProvider_Determinism`; `-count=10` clean |
 | 6 | Hashing unchanged | `internal/ingest/snapshot.go` | `TestBuildSnapshotMatchesDirectFreeze` (hash equals direct `evidence.Freeze`); `internal/evidence` unmodified |
 | 7 | Nil-snapshot blocker closed | `internal/api/snapshot_provider.go` + one `server.go` branch | `TestSubmitHandler_ValidSubmitWithProvider_ClosesNilSnapshotBlocker`, `TestSubmitHandler_BlankContentWithProvider_Returns400_NoStoreCall` |
@@ -82,17 +83,50 @@ git status --short       -> clean (empty)
 - The splitter version is defined and available (`ingest.Splitter()`), but not
   persisted: `sqlite.Submit` still writes `normalization_version = 1`, and the
   HTTP adapter drops the version for now. No schema change was made (deferred).
-- `Freeze` errors other than the no-units sentinel (e.g. a whitespace-only code
-  unit) still map to HTTP 503, not 400. Only the empty-content case is a 400.
+- **DEFECT (fixed by M2-1g D1):** `Freeze` errors other than the no-units sentinel
+  — specifically a fenced code block whose interior is blank but not empty, e.g.
+  `"```\n   \n```"` — map to HTTP 503, not 400. Only the empty-content case is a
+  400.
+- **GAP (closed by M2-1g D2):** the ingestion `SnapshotProvider` is proven through
+  `internal/api` handler tests, but every one of those tests wires `NewServer` to
+  the in-memory `fakeStore`. No test drives an HTTP submit into a real
+  `*sqlite.Store`, so "the nil-snapshot blocker is closed" was proven at the
+  provider/parameter level, not end-to-end against SQLite.
 - The ingestion `SnapshotProvider` is proven through `internal/api` handler
   tests, but is not yet wired into `cmd/` service composition (no HTTP server in
   `main.go` yet). This is service wiring, deferred.
-- Native Windows `-race` was not run (`-race requires cgo`); the WSL Ubuntu race
-  environment was not exercised in this run. These slices add no concurrency, so
-  no race result is claimed as PASS.
+- Native Windows `-race` was not run (`-race requires cgo`). **This item is now
+  closed by an independent verifier run**: `go test -race ./internal/ingest
+  ./internal/api -count=1` in WSL Ubuntu 24.04 with go1.27.1 linux/amd64 and gcc
+  13.3.0 at tree `e605999` → `ok internal/ingest 1.053s`, `ok internal/api
+  1.067s`, both exit 0. The race gate is NOT claimed for `internal/worker` or
+  `internal/storage/sqlite`, which M2-1 did not touch.
+
+## Independent audit follow-up (2026-09-21)
+
+An independent audit of this report returned **CONDITIONAL PASS / PARTIAL
+ACCEPTANCE** with five gaps. Every claim was re-checked against the working tree
+by the coordinator:
+
+| Audit gap | Verdict | Evidence |
+|---|---|---|
+| GAP-2 whitespace-only code block → 503 | **CONFIRMED, worse than reported** | Live probe at `e605999`: `"```\n   \n```"` → 503; `"```\n\t\n```"` → 503; and a document that also contains a valid heading (`"```\n   \n```\n\n# Heading"`) → **503**, so valid content is rejected as a server outage. `"```\n```"` correctly → 400. |
+| GAP-1 blocker proven only with `fakeStore` | **CONFIRMED** | `grep -rn 'sqlite\.' internal/api/*_test.go` shows `sqlite` used for types only; no test opens a real store. |
+| GAP-3 splitter version not persisted | **CONFIRMED, but already disclosed** | Requirement row 4 said "recorded"; the limitations section already stated it is not persisted. Row 4 wording corrected above. |
+| GAP-4 native `-race` not run | **CLOSED by verifier** | WSL Ubuntu 24.04 + go1.27.1 + gcc 13.3.0 race run above, both packages `ok`. |
+| GAP-5 not wired into `cmd/` binary | **CONFIRMED and expected** | `cmd/speccouncil/main.go` is still the M1 CLI demo; no HTTP entry point exists yet by design. |
+
+Repair scope released as `docs/cline/m2/M2-1g-INGEST-REPAIR.md` (packet commit
+`6236a31`): D1 blank-code guard + splitter bump to `"2"`, D2 real-SQLite
+end-to-end submit proof. **M2-1 is not accepted as complete until M2-1g passes
+independent verification.**
 
 ## Conclusion
 
-M2-1 meets every stated requirement (1–7) with live, passing test evidence on the
-current tree, and preserves all M1 guarantees. The HTTP nil-snapshot blocker is
-closed. Ready to proceed to M2-2 (finding/citation contract).
+M2-1's ingestion engine parses, IDs, kind-maps, and freezes deterministically,
+preserves M1 hashing, and closes the nil-snapshot blocker at the provider and
+handler level. It is **not** accepted as a whole: one client-input defect (503
+instead of 400) and one missing end-to-end proof (real `*sqlite.Store`) are
+tracked by M2-1g. Do not start M2-2 (finding/citation contract) before M2-1g is
+verified.
+
