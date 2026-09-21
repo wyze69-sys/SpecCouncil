@@ -24,18 +24,24 @@ It has two parts:
 
 ## Hard money rules (non-negotiable)
 
-- **Cost cap: US$3.00.** Before any live call, compute the estimate
-  (`totalCalls * perCallEstimate`). If the estimate exceeds the cap, refuse and
-  exit non-zero without making a single call. The cap is a constant AND overridable
-  DOWN only via `-max-cost` (a value above $3.00 is clamped to $3.00). It can never
-  be raised above $3.00 in this slice.
+- **Two-layer cost guard.**
+  - **Default cap: US$0.50.** `-max-cost` defaults to 0.50 and may be set to any
+    value; a value ABOVE the hard ceiling is clamped to the ceiling.
+  - **Hard ceiling: US$3.00.** An absolute wall — `-max-cost` can never exceed it.
+  - **Pre-run estimate must be token-based, not a flat per-call guess.** Estimate
+    input tokens from the actual assembled prompt length per arm (`len(prompt)/4`,
+    the same rough token proxy the fake adapter uses) plus the `MaxTokens` output
+    ceiling, times a per-token USD constant for deepseek-v4.1-flash. This yields a
+    realistic estimate (~cents for 60 small calls), so a tight cap like $0.50 does
+    not falsely trip. Keep the numbers as named constants with a comment showing
+    the arithmetic. If the token-based estimate exceeds `-max-cost`, refuse and exit
+    non-zero WITHOUT a single call.
 - The existing `-i-accept-cost` flag stays required. Both the flag AND the
   under-cap check must pass. No key, no flag, or over-cap → zero calls.
 - Default `-repeats 3`, 2 fixture cases, 4 arms = 60 calls. At the real
-  deepseek-flash rate this is well under $3 (the smoke test showed ~$0.0000369 for
-  a few tokens; even at a generous $0.01/call that is $0.60). Keep the coarse
-  `0.03/call` estimate from M2-4a as the conservative pre-run number so the guard
-  errs high, not low.
+  deepseek-flash rate this is a few cents total (the smoke test showed
+  ~$0.0000369 for a ~50-token call). The token-based estimate above should land in
+  cents; replace the coarse `0.03/call` stub from M2-4a with it.
 - The run reads the key exactly like `cmd/speccouncil`: from
   `SPECCOUNCIL_CLINE_KEY_FILE` (default `.secrets/cline_api_key`), TrimSpace,
   refuse on empty/placeholder. Never log the key. The key file stays git-ignored.
@@ -91,7 +97,7 @@ the real provider. 5. On completion, write outputs to disk (below). The `fake`
 default path stays byte-for-byte unchanged.
 
 Add flags: `-out <dir>` (default `docs/cline/m2/results`), `-max-cost <float>`
-(clamped to <=3.00).
+(default 0.50, clamped to <=3.00 hard ceiling).
 
 ## Outputs the run must persist (committed evidence)
 
@@ -144,7 +150,9 @@ New retry/cost-cap logic MUST have fake-provider unit tests:
   findings, benchmark continues;
 - a `provider_rejected` scripted error → NOT retried, run stops;
 - estimate over cap → zero calls, non-zero exit;
-- `-max-cost 5` clamps to 3.00.
+- `-max-cost 5` clamps to 3.00 (hard ceiling); default cap is 0.50;
+- token-based estimate for the 60-call fixture run lands in cents (well under the
+  0.50 default cap) — assert it is > 0 and < 0.50.
 
 ## Allowed paths
 
@@ -159,7 +167,7 @@ New retry/cost-cap logic MUST have fake-provider unit tests:
 `internal/benchmark/score.go`, `report.go`, `types.go`, `fixtures.go` (scoring and
 data model are FROZEN from M2-4a — measurement must not change for a live run),
 `internal/provider/**` (adapter frozen), all other product code, migrations,
-`go.mod`/`go.sum` (no new deps). Do NOT raise the cost cap above $3.00. Do NOT commit
+`go.mod`/`go.sum` (no new deps). Do NOT raise the hard ceiling above $3.00. Do NOT commit
 the key. Do NOT change how any metric is computed. If a real result looks bad for the
 four-role arm, report it honestly — changing the harness to flatter an arm is the one
 explicitly forbidden act in the design (BUILD-MAP M2-4).
@@ -185,7 +193,7 @@ SLICE: M2-4b (wiring only; live run deferred to Hermes)
 START: <sha> / FINAL: <sha>
 CHANGED: <git diff --cached --name-only>
 WIRING: <how -provider cline builds cline.New; key read path; fake default unchanged>
-COSTCAP: <the $3.00 constant, -max-cost clamp behavior, and that over-cap makes zero calls>
+COSTCAP: <default cap $0.50, hard ceiling $3.00, -max-cost clamp behavior, token-based estimate value for the 60-call run, and that over-cap makes zero calls>
 RETRY: <transport/timeout retried up to 3 attempts; provider_rejected not retried; failed run = zero findings, benchmark continues — all via provider.CategoryOf/IsRetryableTransport>
 COSTCAPTURE: <token-based telemetry estimate; confirm provider.Response and cline adapter NOT modified>
 FROZEN: <confirm score.go/report.go/types.go/fixtures.go unchanged; call budgets 1/1/4/4 unchanged>
