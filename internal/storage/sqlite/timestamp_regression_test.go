@@ -2,17 +2,35 @@ package sqlite
 
 import (
 	"context"
+	"io/fs"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
+	"github.com/wyze69-sys/SpecCouncil/internal/storage/sqlite/migrations"
 )
 
 func TestTimestampMigrationNormalizesLegacyWholeSecondRows(t *testing.T) {
 	ctx := context.Background()
 	store, _ := setupTestStore(t, 100*time.Millisecond)
-	if err := store.Migrate(ctx); err != nil {
+	p6FS := fstest.MapFS{}
+	for _, name := range []string{
+		"001_migration_metadata.sql",
+		"002_core_schema.sql",
+		"003_state_guards.sql",
+		"004_findings_insert_guard.sql",
+		"005_basis_refs_insert_guard.sql",
+		"006_normalize_legacy_timestamps.sql",
+	} {
+		data, err := fs.ReadFile(migrations.FS, name)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", name, err)
+		}
+		p6FS[name] = &fstest.MapFile{Data: data}
+	}
+	if err := store.migrateFS(ctx, p6FS); err != nil {
 		t.Fatalf("initial migrate: %v", err)
 	}
 	writer, err := store.writerDB()
@@ -39,7 +57,7 @@ func TestTimestampMigrationNormalizesLegacyWholeSecondRows(t *testing.T) {
 		t.Fatalf("seed legacy rows: %v", err)
 	}
 
-	if err := store.Migrate(ctx); err != nil {
+	if err := store.migrateFS(ctx, p6FS); err != nil {
 		t.Fatalf("reapply timestamp migration: %v", err)
 	}
 

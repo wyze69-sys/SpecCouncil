@@ -18,7 +18,7 @@ func openMigratedStore(t *testing.T) (*Store, *sql.DB) {
 	store, _ := setupTestStore(t, 100*time.Millisecond)
 	// Apply migrations through 002 to test the core P2 schema fixture in isolation
 	p2FS := fstest.MapFS{}
-	for _, name := range []string{"001_migration_metadata.sql", "002_core_schema.sql"} {
+	for _, name := range []string{"001_migration_metadata.sql", "002_core_schema.sql", "007_finding_kind_and_anchor.sql"} {
 		data, err := fs.ReadFile(migrations.FS, name)
 		if err != nil {
 			t.Fatalf("read migration %s: %v", name, err)
@@ -59,8 +59,8 @@ func TestCoreSchema_TablesAndColumnsExist(t *testing.T) {
 			"error_message", "call_count", "started_at", "completed_at", "created_at",
 		},
 		"findings": {
-			"id", "role_run_id", "finding_id", "severity", "category",
-			"issue", "recommendation", "created_at",
+			"id", "role_run_id", "finding_id", "kind", "severity", "category",
+			"issue", "recommendation", "anchor_unit_id", "created_at",
 		},
 		"finding_basis_refs": {
 			"id", "finding_id", "evidence_unit_id", "ordinal",

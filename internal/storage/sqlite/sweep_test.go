@@ -118,6 +118,7 @@ func TestCancelSweep_InFlightAndTerminalRolesUnchanged(t *testing.T) {
 	findings := []domain.Finding{
 		{
 			ID:             "find-1",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityHigh,
 			Category:       "architecture",
 			Issue:          "Issue description",
@@ -464,6 +465,7 @@ func TestCutoffSweep_InFlightAndCompleteUnchanged(t *testing.T) {
 	findings := []domain.Finding{
 		{
 			ID:             "f-1",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityMedium,
 			Category:       "correctness",
 			Issue:          "Issue",
@@ -687,6 +689,7 @@ func TestDeadlineSweep_CompleteUnchangedAndTerminalNoOp(t *testing.T) {
 	findings := []domain.Finding{
 		{
 			ID:             "f-sec-1",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityCritical,
 			Category:       "security",
 			Issue:          "Crit issue",
@@ -808,6 +811,7 @@ func TestRestartSweep_MultipleSessions(t *testing.T) {
 	findings := []domain.Finding{
 		{
 			ID:             "f-rec-1",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityHigh,
 			Category:       "security",
 			Issue:          "Issue",
@@ -1135,6 +1139,7 @@ func TestSweep_PreservationAndForbiddenScope(t *testing.T) {
 	findings := []domain.Finding{
 		{
 			ID:             "f-preserve-1",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityCritical,
 			Category:       "security",
 			Issue:          "Crit issue",

@@ -408,9 +408,11 @@ func (s *Store) ComposeSessionWithParams(ctx context.Context, params ComposePara
 
 		// 3. Query findings for completed roles inside the transaction.
 		queryFindings := `SELECT
-			f.id, rr.role, f.finding_id, f.severity, f.category, f.issue, f.recommendation
+			f.id, rr.role, f.finding_id, f.kind, f.severity, f.category, f.issue,
+			f.recommendation, COALESCE(eu.unit_id, '')
 		FROM findings f
 		JOIN role_runs rr ON f.role_run_id = rr.id
+		LEFT JOIN evidence_units eu ON eu.id = f.anchor_unit_id
 		WHERE rr.session_id = ? AND rr.status = 'complete';`
 
 		fRows, err := conn.QueryContext(ctx, queryFindings, sessionID)
@@ -423,21 +425,27 @@ func (s *Store) ComposeSessionWithParams(ctx context.Context, params ComposePara
 			dbID           string
 			role           domain.Role
 			findingID      string
+			kind           domain.FindingKind
 			severity       domain.Severity
 			category       string
 			issue          string
 			recommendation string
+			anchorRef      string
 		}
 
 		var rawFindings []rawFinding
 		for fRows.Next() {
 			var rf rawFinding
-			var roleStr, sevStr string
-			if err := fRows.Scan(&rf.dbID, &roleStr, &rf.findingID, &sevStr, &rf.category,
-				&rf.issue, &rf.recommendation); err != nil {
+			var roleStr, kindStr, sevStr string
+			if err := fRows.Scan(&rf.dbID, &roleStr, &rf.findingID, &kindStr, &sevStr, &rf.category,
+				&rf.issue, &rf.recommendation, &rf.anchorRef); err != nil {
 				return fmt.Errorf("scan finding: %w", sanitizeError(err))
 			}
 			rf.role = domain.Role(roleStr)
+			rf.kind = domain.FindingKind(kindStr)
+			if !domain.IsValidFindingKind(rf.kind) {
+				return fmt.Errorf("%w: invalid finding kind %q", ErrMalformedData, kindStr)
+			}
 			rf.severity = domain.Severity(sevStr)
 			if !domain.IsValidSeverity(rf.severity) {
 				return fmt.Errorf("%w: invalid severity %q", ErrMalformedData, sevStr)
@@ -491,11 +499,13 @@ func (s *Store) ComposeSessionWithParams(ctx context.Context, params ComposePara
 			}
 			findingsByRole[rf.role] = append(findingsByRole[rf.role], domain.Finding{
 				ID:             rf.findingID,
+				Kind:           rf.kind,
 				Severity:       rf.severity,
 				Category:       rf.category,
 				Issue:          rf.issue,
 				Recommendation: rf.recommendation,
 				BasisRefs:      refs,
+				AnchorRef:      rf.anchorRef,
 			})
 		}
 

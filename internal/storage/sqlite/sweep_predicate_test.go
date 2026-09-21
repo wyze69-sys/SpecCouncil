@@ -113,6 +113,7 @@ func TestSweepPredicate_2_Cancellation_CancelledInterruptsPending(t *testing.T) 
 		Findings: []domain.Finding{
 			{
 				ID:             "f-1",
+				Kind:           domain.FindingExisting,
 				Severity:       domain.SeverityMedium,
 				Category:       "arch",
 				Issue:          "Arch issue",

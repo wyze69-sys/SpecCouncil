@@ -559,9 +559,11 @@ func queryRoleStatuses(ctx context.Context, reader *sql.DB, sessionID string) ([
 func queryCompletedRoleFindings(ctx context.Context, reader *sql.DB, sessionID string) (map[domain.Role][]domain.Finding, error) {
 	// 1. Query findings for completed roles only.
 	queryFindings := `SELECT
-		f.id, rr.role, f.finding_id, f.severity, f.category, f.issue, f.recommendation
+		f.id, rr.role, f.finding_id, f.kind, f.severity, f.category, f.issue,
+		f.recommendation, COALESCE(eu.unit_id, '')
 	FROM findings f
 	JOIN role_runs rr ON f.role_run_id = rr.id
+	LEFT JOIN evidence_units eu ON eu.id = f.anchor_unit_id
 	WHERE rr.session_id = ? AND rr.status = 'complete';`
 
 	fRows, err := reader.QueryContext(ctx, queryFindings, sessionID)
@@ -574,21 +576,27 @@ func queryCompletedRoleFindings(ctx context.Context, reader *sql.DB, sessionID s
 		dbID           string
 		role           domain.Role
 		findingID      string
+		kind           domain.FindingKind
 		severity       domain.Severity
 		category       string
 		issue          string
 		recommendation string
+		anchorRef      string
 	}
 
 	var rawFindings []rawFindingItem
 	for fRows.Next() {
 		var item rawFindingItem
-		var roleStr, sevStr string
-		if err := fRows.Scan(&item.dbID, &roleStr, &item.findingID, &sevStr, &item.category,
-			&item.issue, &item.recommendation); err != nil {
+		var roleStr, kindStr, sevStr string
+		if err := fRows.Scan(&item.dbID, &roleStr, &item.findingID, &kindStr, &sevStr, &item.category,
+			&item.issue, &item.recommendation, &item.anchorRef); err != nil {
 			return nil, fmt.Errorf("scan finding: %w", sanitizeError(err))
 		}
 		item.role = domain.Role(roleStr)
+		item.kind = domain.FindingKind(kindStr)
+		if !domain.IsValidFindingKind(item.kind) {
+			return nil, fmt.Errorf("%w: invalid finding kind %q", ErrMalformedData, kindStr)
+		}
 		item.severity = domain.Severity(sevStr)
 		if !domain.IsValidSeverity(item.severity) {
 			return nil, fmt.Errorf("%w: invalid finding severity %q", ErrMalformedData, sevStr)
@@ -644,11 +652,13 @@ func queryCompletedRoleFindings(ctx context.Context, reader *sql.DB, sessionID s
 		}
 		finding := domain.Finding{
 			ID:             rf.findingID,
+			Kind:           rf.kind,
 			Severity:       rf.severity,
 			Category:       rf.category,
 			Issue:          rf.issue,
 			Recommendation: rf.recommendation,
 			BasisRefs:      refs,
+			AnchorRef:      rf.anchorRef,
 		}
 		result[rf.role] = append(result[rf.role], finding)
 	}
@@ -753,7 +763,7 @@ func findingLess(a, b review.ReportFinding) bool {
 
 func primaryRef(f domain.Finding) string {
 	if len(f.BasisRefs) == 0 {
-		return ""
+		return f.AnchorRef
 	}
 	lowest := f.BasisRefs[0]
 	for _, ref := range f.BasisRefs[1:] {

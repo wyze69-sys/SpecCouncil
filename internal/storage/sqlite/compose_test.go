@@ -64,6 +64,7 @@ func TestCompose_AllRoleSuccess(t *testing.T) {
 		domain.RoleRequirements: {
 			{
 				ID:             "find-req-1",
+				Kind:           domain.FindingExisting,
 				Severity:       domain.SeverityHigh,
 				Category:       "correctness",
 				Issue:          "Ambiguous requirement phrasing",
@@ -74,6 +75,7 @@ func TestCompose_AllRoleSuccess(t *testing.T) {
 		domain.RoleArchitecture: {
 			{
 				ID:             "find-arch-1",
+				Kind:           domain.FindingExisting,
 				Severity:       domain.SeverityCritical,
 				Category:       "architecture",
 				Issue:          "Single point of failure",
@@ -84,6 +86,7 @@ func TestCompose_AllRoleSuccess(t *testing.T) {
 		domain.RoleQA: {
 			{
 				ID:             "find-qa-1",
+				Kind:           domain.FindingExisting,
 				Severity:       domain.SeverityLow,
 				Category:       "testability",
 				Issue:          "Missing test scenarios",
@@ -94,6 +97,7 @@ func TestCompose_AllRoleSuccess(t *testing.T) {
 		domain.RoleSecurity: {
 			{
 				ID:             "find-sec-1",
+				Kind:           domain.FindingExisting,
 				Severity:       domain.SeverityHigh,
 				Category:       "security",
 				Issue:          "Cleartext secret storage",
@@ -1004,6 +1008,7 @@ func TestCompose_ExactUnchangedRowSnapshots(t *testing.T) {
 			findings = []domain.Finding{
 				{
 					ID:             "find-req-1",
+					Kind:           domain.FindingExisting,
 					Severity:       domain.SeverityHigh,
 					Category:       "correctness",
 					Issue:          "Issue description",
@@ -1152,6 +1157,7 @@ func TestTerminalReport_DeterministicReportBytes(t *testing.T) {
 			domain.RoleRequirements: {
 				{
 					ID:             "find-req-1",
+					Kind:           domain.FindingExisting,
 					Severity:       domain.SeverityHigh,
 					Category:       "correctness",
 					Issue:          "Issue 1",
@@ -1160,6 +1166,7 @@ func TestTerminalReport_DeterministicReportBytes(t *testing.T) {
 				},
 				{
 					ID:             "find-req-2",
+					Kind:           domain.FindingExisting,
 					Severity:       domain.SeverityCritical,
 					Category:       "security",
 					Issue:          "Issue 2",
@@ -1170,6 +1177,7 @@ func TestTerminalReport_DeterministicReportBytes(t *testing.T) {
 			domain.RoleArchitecture: {
 				{
 					ID:             "find-arch-1",
+					Kind:           domain.FindingExisting,
 					Severity:       domain.SeverityHigh,
 					Category:       "perf",
 					Issue:          "Issue 3",

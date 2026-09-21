@@ -380,3 +380,53 @@ func TestReportJSONOutcomeCountsAndCancelRequested(t *testing.T) {
 		}
 	}
 }
+
+func TestComposerAnchorFallbackOrdering(t *testing.T) {
+	verdict := Verdict{
+		Status:              domain.SessionComplete,
+		Reason:              domain.ReasonAllRolesComplete,
+		CompletedRoleCount:  4,
+		IncompleteRoleCount: 0,
+	}
+	outcomes := []RoleOutcome{
+		{
+			Role:   domain.RoleRequirements,
+			Status: domain.RoleComplete,
+			Findings: []domain.Finding{
+				{
+					ID:             "F-2",
+					Kind:           domain.FindingExisting,
+					Severity:       domain.SeverityHigh,
+					Category:       "correctness",
+					Issue:          "issue 2",
+					Recommendation: "rec 2",
+					BasisRefs:      []string{"B-1"},
+				},
+				{
+					ID:             "F-1",
+					Kind:           domain.FindingMissing,
+					Severity:       domain.SeverityHigh,
+					Category:       "correctness",
+					Issue:          "issue 1",
+					Recommendation: "rec 1",
+					BasisRefs:      nil,
+					AnchorRef:      "A-1",
+				},
+			},
+		},
+		{Role: domain.RoleArchitecture, Status: domain.RoleComplete},
+		{Role: domain.RoleQA, Status: domain.RoleComplete},
+		{Role: domain.RoleSecurity, Status: domain.RoleComplete},
+	}
+
+	rep := BuildReport("sess-1", "snap-1", "hash-1", outcomes, verdict, false)
+	if len(rep.Findings) != 2 {
+		t.Fatalf("expected 2 findings, got %d", len(rep.Findings))
+	}
+	if rep.Findings[0].Finding.ID != "F-1" {
+		t.Errorf("expected first finding to be F-1 (anchored at A-1), got %s", rep.Findings[0].Finding.ID)
+	}
+	if rep.Findings[1].Finding.ID != "F-2" {
+		t.Errorf("expected second finding to be F-2 (cites B-1), got %s", rep.Findings[1].Finding.ID)
+	}
+}

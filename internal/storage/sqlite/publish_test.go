@@ -70,6 +70,7 @@ func TestPublishRoleSuccess_Valid(t *testing.T) {
 	findings := []domain.Finding{
 		{
 			ID:             "find-sec-1",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityCritical,
 			Category:       "security",
 			Issue:          "Plaintext credential storage in config file",
@@ -78,6 +79,7 @@ func TestPublishRoleSuccess_Valid(t *testing.T) {
 		},
 		{
 			ID:             "find-qa-1",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityLow,
 			Category:       "testing",
 			Issue:          "Missing boundary value tests for timeout parameter",
@@ -1198,6 +1200,7 @@ func TestPublish_UnchangedSessionAndSnapshot(t *testing.T) {
 	findings := []domain.Finding{
 		{
 			ID:             "f-pres",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityMedium,
 			Category:       "perf",
 			Issue:          "Memory allocation spike",

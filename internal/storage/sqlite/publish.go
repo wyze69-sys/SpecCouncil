@@ -171,11 +171,32 @@ func validatePublishSuccessParams(params PublishSuccessParams) error {
 			}
 		}
 
+		if strings.TrimSpace(string(f.Kind)) == "" {
+			return &PublicationValidationError{Field: prefix + ".kind", Message: "must not be empty"}
+		}
+		if !domain.IsValidFindingKind(f.Kind) {
+			return &PublicationValidationError{Field: prefix + ".kind", Message: fmt.Sprintf("invalid kind %q", f.Kind)}
+		}
+
+		minRefs, maxRefs, _ := domain.BasisRefsBounds(f.Kind)
 		nRefs := len(f.BasisRefs)
-		if nRefs < domain.MinBasisRefsPerFinding || nRefs > domain.MaxBasisRefsPerFinding {
+		if nRefs < minRefs || nRefs > maxRefs {
 			return &PublicationValidationError{
 				Field:   prefix + ".basis_refs",
-				Message: fmt.Sprintf("basis_refs count %d must be between %d and %d", nRefs, domain.MinBasisRefsPerFinding, domain.MaxBasisRefsPerFinding),
+				Message: fmt.Sprintf("basis_refs count %d must be between %d and %d", nRefs, minRefs, maxRefs),
+			}
+		}
+
+		if (f.Kind == domain.FindingExisting || f.Kind == domain.FindingConflicting) && strings.TrimSpace(f.AnchorRef) != "" {
+			return &PublicationValidationError{
+				Field:   prefix + ".anchor_ref",
+				Message: "must be empty unless the finding kind is missing",
+			}
+		}
+		if f.Kind == domain.FindingMissing && strings.TrimSpace(f.AnchorRef) == "" {
+			return &PublicationValidationError{
+				Field:   prefix + ".anchor_ref",
+				Message: "must not be empty when the finding kind is missing",
 			}
 		}
 
@@ -348,6 +369,14 @@ func (s *Store) PublishRoleSuccess(ctx context.Context, params PublishSuccessPar
 						}
 					}
 				}
+				if f.AnchorRef != "" {
+					if _, ok := unitIDToDBID[f.AnchorRef]; !ok {
+						return &PublicationValidationError{
+							Field:   fmt.Sprintf("findings[%d].anchor_ref", i),
+							Message: fmt.Sprintf("anchor ref %q does not exist in session snapshot %q", f.AnchorRef, snapshotID),
+						}
+					}
+				}
 			}
 		}
 
@@ -363,10 +392,14 @@ func (s *Store) PublishRoleSuccess(ctx context.Context, params PublishSuccessPar
 		// Insert findings and basis references in the same transaction while role is still in_flight.
 		for _, f := range params.Findings {
 			findingPK := fmt.Sprintf("%s:%s", params.RoleRunID, f.ID)
+			var anchorDBID any
+			if f.AnchorRef != "" {
+				anchorDBID = unitIDToDBID[f.AnchorRef]
+			}
 			_, fErr := conn.ExecContext(ctx, `
-				INSERT INTO findings (id, role_run_id, finding_id, severity, category, issue, recommendation, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-			`, findingPK, params.RoleRunID, f.ID, string(f.Severity), f.Category, f.Issue, f.Recommendation, completedAtStr)
+				INSERT INTO findings (id, role_run_id, finding_id, kind, severity, category, issue, recommendation, anchor_unit_id, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+			`, findingPK, params.RoleRunID, f.ID, string(f.Kind), string(f.Severity), f.Category, f.Issue, f.Recommendation, anchorDBID, completedAtStr)
 			if fErr != nil {
 				return fmt.Errorf("insert finding %q: %w", f.ID, sanitizeError(fErr))
 			}

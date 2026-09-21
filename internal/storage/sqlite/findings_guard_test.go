@@ -20,8 +20,8 @@ func TestFindingsInsertGuard_1_FreshStoreMigrationCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if count != 6 {
-		t.Fatalf("expected 6 migrations applied, got %d", count)
+	if count != 7 {
+		t.Fatalf("expected 7 migrations applied, got %d", count)
 	}
 
 	var version int
@@ -208,6 +208,7 @@ func TestFindingsInsertGuard_5_PublishRoleSuccessEndToEnd(t *testing.T) {
 		Findings: []domain.Finding{
 			{
 				ID:             "find-e2e-1",
+				Kind:           domain.FindingExisting,
 				Severity:       domain.SeverityHigh,
 				Category:       "security",
 				Issue:          "Potential injection",
@@ -269,8 +270,8 @@ func TestFindingsInsertGuard_6_MigrateIdempotency(t *testing.T) {
 	}
 
 	rowsBefore := queryAppliedMigrations(t, writer)
-	if len(rowsBefore) != 6 {
-		t.Fatalf("expected 6 applied migrations, got %d", len(rowsBefore))
+	if len(rowsBefore) != 7 {
+		t.Fatalf("expected 7 applied migrations, got %d", len(rowsBefore))
 	}
 
 	// Re-run Migrate on same store
@@ -279,8 +280,8 @@ func TestFindingsInsertGuard_6_MigrateIdempotency(t *testing.T) {
 	}
 
 	rowsAfter := queryAppliedMigrations(t, writer)
-	if len(rowsAfter) != 6 {
-		t.Fatalf("expected 6 applied migrations after second migrate, got %d", len(rowsAfter))
+	if len(rowsAfter) != 7 {
+		t.Fatalf("expected 7 applied migrations after second migrate, got %d", len(rowsAfter))
 	}
 
 	for i := range rowsBefore {

@@ -534,6 +534,7 @@ func TestE2E_04_SuccessfulPublication(t *testing.T) {
 	findings := []domain.Finding{
 		{
 			ID:             "find-req-1",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityCritical,
 			Category:       "correctness",
 			Issue:          "Critical missing invariant in requirements",
@@ -542,6 +543,7 @@ func TestE2E_04_SuccessfulPublication(t *testing.T) {
 		},
 		{
 			ID:             "find-req-2",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityHigh,
 			Category:       "security",
 			Issue:          "Missing authentication requirement",
@@ -603,6 +605,7 @@ func TestE2E_04_SuccessfulPublication(t *testing.T) {
 	invalidFindings := []domain.Finding{
 		{
 			ID:             "find-arch-invalid",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityMedium,
 			Category:       "architecture",
 			Issue:          "Issue",
@@ -803,7 +806,7 @@ func TestE2E_06_CancellationFlow(t *testing.T) {
 		SessionID:   "sess_cancel_flow",
 		RoleRunID:   res1.RoleRunID,
 		Role:        res1.Role,
-		Findings:    []domain.Finding{{ID: "f-drain-1", Severity: domain.SeverityHigh, Category: "correctness", Issue: "Issue 1", Recommendation: "Rec 1", BasisRefs: []string{"req-1"}}},
+		Findings:    []domain.Finding{{ID: "f-drain-1", Kind: domain.FindingExisting, Severity: domain.SeverityHigh, Category: "correctness", Issue: "Issue 1", Recommendation: "Rec 1", BasisRefs: []string{"req-1"}}},
 		CallCount:   1,
 		CompletedAt: t0.Add(4 * time.Minute),
 	})
@@ -1011,7 +1014,7 @@ func TestE2E_08_CutoffFlow(t *testing.T) {
 		SessionID:   "sess_cutoff_flow",
 		RoleRunID:   res1.RoleRunID,
 		Role:        res1.Role,
-		Findings:    []domain.Finding{{ID: "f-cut-1", Severity: domain.SeverityLow, Category: "perf", Issue: "Issue", Recommendation: "Rec", BasisRefs: []string{"brief-1"}}},
+		Findings:    []domain.Finding{{ID: "f-cut-1", Kind: domain.FindingExisting, Severity: domain.SeverityLow, Category: "perf", Issue: "Issue", Recommendation: "Rec", BasisRefs: []string{"brief-1"}}},
 		CallCount:   1,
 		CompletedAt: tPub,
 	})
@@ -1127,7 +1130,7 @@ func TestE2E_09_HardDeadlineFlow(t *testing.T) {
 		SessionID:   "sess_hard_dead",
 		RoleRunID:   resReq.RoleRunID,
 		Role:        resReq.Role,
-		Findings:    []domain.Finding{{ID: "late-find", Severity: domain.SeverityLow, Category: "test", Issue: "Late", Recommendation: "Late", BasisRefs: []string{"brief-1"}}},
+		Findings:    []domain.Finding{{ID: "late-find", Kind: domain.FindingExisting, Severity: domain.SeverityLow, Category: "test", Issue: "Late", Recommendation: "Late", BasisRefs: []string{"brief-1"}}},
 		CallCount:   1,
 		CompletedAt: tPastDead.Add(2 * time.Minute),
 	})
@@ -1170,6 +1173,7 @@ func TestE2E_10_RestartRecovery(t *testing.T) {
 	findings := []domain.Finding{
 		{
 			ID:             "f-restart-1",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityHigh,
 			Category:       "correctness",
 			Issue:          "Spec issue",
@@ -1494,7 +1498,7 @@ func TestE2E_12_ConcurrentActorsNoLostUpdate(t *testing.T) {
 					SessionID:   claimedSessID,
 					RoleRunID:   reqRunID,
 					Role:        domain.RoleRequirements,
-					Findings:    []domain.Finding{{ID: fmt.Sprintf("find-race-%d", idx), Severity: domain.SeverityLow, Category: "test", Issue: "Issue", Recommendation: "Rec", BasisRefs: []string{"req-1"}}},
+					Findings:    []domain.Finding{{ID: fmt.Sprintf("find-race-%d", idx), Kind: domain.FindingExisting, Severity: domain.SeverityLow, Category: "test", Issue: "Issue", Recommendation: "Rec", BasisRefs: []string{"req-1"}}},
 					CallCount:   1,
 					CompletedAt: t0.Add(7 * time.Minute),
 				})
@@ -1733,6 +1737,7 @@ func TestE2E_14_ReportDeterminismAndImmutability(t *testing.T) {
 	findingsReq := []domain.Finding{
 		{
 			ID:             "f-req-low",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityLow,
 			Category:       "clarity",
 			Issue:          "Low req",
@@ -1741,6 +1746,7 @@ func TestE2E_14_ReportDeterminismAndImmutability(t *testing.T) {
 		},
 		{
 			ID:             "f-req-crit",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityCritical,
 			Category:       "correctness",
 			Issue:          "Crit req",
@@ -1751,6 +1757,7 @@ func TestE2E_14_ReportDeterminismAndImmutability(t *testing.T) {
 	findingsArch := []domain.Finding{
 		{
 			ID:             "f-arch-crit",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityCritical,
 			Category:       "architecture",
 			Issue:          "Crit arch",
@@ -1759,6 +1766,7 @@ func TestE2E_14_ReportDeterminismAndImmutability(t *testing.T) {
 		},
 		{
 			ID:             "f-arch-med",
+			Kind:           domain.FindingExisting,
 			Severity:       domain.SeverityMedium,
 			Category:       "reliability",
 			Issue:          "Med arch",
@@ -2029,7 +2037,7 @@ func TestE2E_16_ForbiddenScopeAndStructuralInvariants(t *testing.T) {
 				SessionID:   "sess_invariants",
 				RoleRunID:   res.RoleRunID,
 				Role:        role,
-				Findings:    []domain.Finding{{ID: "f-inv-1", Severity: domain.SeverityCritical, Category: "correctness", Issue: "Issue", Recommendation: "Rec", BasisRefs: []string{"req-1"}}},
+				Findings:    []domain.Finding{{ID: "f-inv-1", Kind: domain.FindingExisting, Severity: domain.SeverityCritical, Category: "correctness", Issue: "Issue", Recommendation: "Rec", BasisRefs: []string{"req-1"}}},
 				CallCount:   1,
 				CompletedAt: t0.Add(time.Duration(i+2) * time.Minute),
 			})

@@ -236,10 +236,10 @@ func findingLess(a, b ReportFinding) bool {
 	return a.Finding.ID < b.Finding.ID
 }
 
-// primaryRef is the lowest basis_ref of a finding, used as a stable tiebreak.
+// primaryRef is the lowest basis_ref of a finding (or AnchorRef when basis_refs is empty), used as a stable tiebreak.
 func primaryRef(f domain.Finding) string {
 	if len(f.BasisRefs) == 0 {
-		return ""
+		return f.AnchorRef
 	}
 	lowest := f.BasisRefs[0]
 	for _, ref := range f.BasisRefs[1:] {
