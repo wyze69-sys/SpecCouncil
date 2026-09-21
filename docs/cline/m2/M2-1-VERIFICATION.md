@@ -1,7 +1,8 @@
 # M2-1 Verification Report — Deterministic Evidence Ingestion
 
 Status: **PASS / ACCEPTED** (2026-09-21) — all six slices plus the M2-1g repair
-are verified against the working tree at `8c7165e`. Nothing pushed.
+are verified against the working tree at `8c7165e`. Pushed to `origin/master` at
+`a2ef8cc` on 2026-09-21.
 
 - Verified at HEAD: `8c7165e` (implementation slices `3a8ca42`…`66267bd`, repair `8c7165e`)
 - Module: `github.com/wyze69-sys/SpecCouncil`, Go 1.27.1
