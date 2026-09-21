@@ -30,7 +30,7 @@ func testSnap(t *testing.T) evidence.Snapshot {
 }
 
 func validBody() string {
-	return `{"findings":[{"id":"F-1","severity":"high","category":"authorization","issue":"Ownership is unspecified.","recommendation":"State who may edit a project.","basis_refs":["R-1"]}]}`
+	return `{"findings":[{"id":"F-1","kind":"existing","severity":"high","category":"authorization","issue":"Ownership is unspecified.","recommendation":"State who may edit a project.","basis_refs":["R-1"]}]}`
 }
 
 func scriptExec(calls ...fake.ScriptedCall) map[domain.Role][]fake.ScriptedCall {
@@ -370,8 +370,8 @@ func TestExecuteCancellationDuringBackoffPreventsSecondCall(t *testing.T) {
 
 func TestExecuteMalformedOutputNeverBecomesAFinding(t *testing.T) {
 	fake := fake.NewFakeProvider(scriptExec(
-		fake.ScriptedCall{Body: `{"findings":[{"id":"X","severity":"critical","category":"c","issue":"i","recommendation":"r","basis_refs":["R-999-DOES-NOT-EXIST"]}]}`},
-		fake.ScriptedCall{Body: `{"findings":[{"id":"X","severity":"critical","category":"c","issue":"i","recommendation":"r","basis_refs":["R-999-DOES-NOT-EXIST"]}]}`},
+		fake.ScriptedCall{Body: `{"findings":[{"id":"X","kind":"existing","severity":"critical","category":"c","issue":"i","recommendation":"r","basis_refs":["R-999-DOES-NOT-EXIST"]}]}`},
+		fake.ScriptedCall{Body: `{"findings":[{"id":"X","kind":"existing","severity":"critical","category":"c","issue":"i","recommendation":"r","basis_refs":["R-999-DOES-NOT-EXIST"]}]}`},
 	))
 	out, _ := execRole(t, fake)
 

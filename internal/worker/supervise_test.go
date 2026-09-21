@@ -77,7 +77,7 @@ func submitAndClaimSession(
 func successScript(findings ...string) fake.ScriptedCall {
 	if len(findings) == 0 {
 		return fake.ScriptedCall{
-			Body: `{"findings":[{"id":"F-1","severity":"high","category":"correctness","issue":"Unvalidated state","recommendation":"Validate state","basis_refs":["unit_1"]}]}`,
+			Body: `{"findings":[{"id":"F-1","kind":"existing","severity":"high","category":"correctness","issue":"Unvalidated state","recommendation":"Validate state","basis_refs":["unit_1"]}]}`,
 		}
 	}
 	return fake.ScriptedCall{

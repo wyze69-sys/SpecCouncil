@@ -138,7 +138,7 @@ func demoSnapshot() snapshotFile {
 // fail its first response and succeed on the repair, so the demonstration also
 // exercises the second-call path.
 func demoScript() scriptFile {
-	valid := `{"findings":[{"id":"F-1","severity":"medium","category":"ownership","issue":"Ownership is asserted but not enforced anywhere in the design.","recommendation":"State which component checks that the caller owns the booking before a cancel is accepted.","basis_refs":["REQ-1","DATA-1"]}]}`
+	valid := `{"findings":[{"id":"F-1","kind":"existing","severity":"medium","category":"ownership","issue":"Ownership is asserted but not enforced anywhere in the design.","recommendation":"State which component checks that the caller owns the booking before a cancel is accepted.","basis_refs":["REQ-1","DATA-1"]}]}`
 
 	out := make(scriptFile, domain.RoleCount)
 	for _, role := range domain.Roles {

@@ -44,18 +44,25 @@ const outputContract = `Return one JSON object and nothing else.
   "findings": [
     {
       "id": "string, unique within this response",
+      "kind": "existing | conflicting | missing",
       "severity": "critical | high | medium | low",
       "category": "short label",
       "issue": "string, 1..1000 characters",
       "recommendation": "string, 1..1000 characters",
-      "basis_refs": ["1 to 5 unit ids taken from the evidence above"]
+      "basis_refs": ["unit ids taken from the evidence above"],
+      "anchor_ref": "one unit id, only for kind missing"
     }
   ]
 }
 
 Rules:
 - At most 15 findings.
-- Every basis_ref must be a unit id that appears in the evidence above.
+- kind existing: 1 to 5 basis_refs about content that is present.
+- kind conflicting: 2 to 5 basis_refs, citing the units that contradict each other.
+- kind missing: anchor_ref is required and names the unit the omission is about
+  (usually a section heading); basis_refs may be empty or hold supporting context.
+- anchor_ref is only allowed for kind missing.
+- Every basis_ref and anchor_ref must be a unit id that appears in the evidence above.
 - An empty findings list is a valid answer when the design raises no concern.
 - Unknown fields are rejected. Return no prose outside the JSON object.`
 

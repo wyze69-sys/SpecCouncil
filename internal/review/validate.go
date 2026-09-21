@@ -112,13 +112,36 @@ func validateStructure(result domain.ReviewerResult) error {
 			}
 		}
 
-		n := len(f.BasisRefs)
-		if n < domain.MinBasisRefsPerFinding || n > domain.MaxBasisRefsPerFinding {
+		if strings.TrimSpace(string(f.Kind)) == "" {
+			return &ValidationError{Category: domain.ErrSchemaInvalid, Message: where + ": empty kind"}
+		}
+		if !domain.IsValidFindingKind(f.Kind) {
 			return &ValidationError{
 				Category: domain.ErrSchemaInvalid,
-				Message:  fmt.Sprintf("%s: %d basis_refs, expected %d..%d", where, n, domain.MinBasisRefsPerFinding, domain.MaxBasisRefsPerFinding),
+				Message:  fmt.Sprintf("%s: unknown kind %q", where, f.Kind),
 			}
 		}
+		minRefs, maxRefs, _ := domain.BasisRefsBounds(f.Kind)
+		n := len(f.BasisRefs)
+		if n < minRefs || n > maxRefs {
+			return &ValidationError{
+				Category: domain.ErrSchemaInvalid,
+				Message:  fmt.Sprintf("%s: kind %q allows %d..%d basis_refs, got %d", where, f.Kind, minRefs, maxRefs, n),
+			}
+		}
+		if (f.Kind == domain.FindingExisting || f.Kind == domain.FindingConflicting) && strings.TrimSpace(f.AnchorRef) != "" {
+			return &ValidationError{
+				Category: domain.ErrSchemaInvalid,
+				Message:  where + ": anchor_ref is only allowed for a missing finding",
+			}
+		}
+		if f.Kind == domain.FindingMissing && strings.TrimSpace(f.AnchorRef) == "" {
+			return &ValidationError{
+				Category: domain.ErrSchemaInvalid,
+				Message:  where + ": missing finding requires exactly one anchor_ref",
+			}
+		}
+
 		seenRefs := make(map[string]struct{}, n)
 		for _, ref := range f.BasisRefs {
 			if strings.TrimSpace(ref) == "" {
@@ -143,6 +166,12 @@ func validateSemantics(result domain.ReviewerResult, snap evidence.Snapshot) err
 					Category: domain.ErrInvalidBasisRef,
 					Message:  fmt.Sprintf("findings[%d] cites %q, which is not in snapshot %s", i, ref, snap.ID),
 				}
+			}
+		}
+		if f.AnchorRef != "" && !snap.HasRef(f.AnchorRef) {
+			return &ValidationError{
+				Category: domain.ErrInvalidBasisRef,
+				Message:  fmt.Sprintf("findings[%d] anchors %q, which is not in snapshot %s", i, f.AnchorRef, snap.ID),
 			}
 		}
 	}

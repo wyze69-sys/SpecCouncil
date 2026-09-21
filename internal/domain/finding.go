@@ -30,14 +30,48 @@ func IsValidSeverity(s Severity) bool {
 	return SeverityRank(s) < 4
 }
 
+// FindingKind is the kind of concern a finding raises.
+type FindingKind string
+
+const (
+	FindingExisting    FindingKind = "existing"
+	FindingConflicting FindingKind = "conflicting"
+	FindingMissing     FindingKind = "missing"
+)
+
+// IsValidFindingKind reports whether k is a canonical finding kind.
+func IsValidFindingKind(k FindingKind) bool {
+	switch k {
+	case FindingExisting, FindingConflicting, FindingMissing:
+		return true
+	}
+	return false
+}
+
+// BasisRefsBounds returns the inclusive basis_refs count allowed for a finding
+// kind, and whether the kind is known.
+func BasisRefsBounds(k FindingKind) (min, max int, ok bool) {
+	switch k {
+	case FindingExisting:
+		return 1, 5, true
+	case FindingConflicting:
+		return 2, 5, true
+	case FindingMissing:
+		return 0, 5, true
+	}
+	return 0, 0, false
+}
+
 // Finding is one validated finding produced by one reviewer role.
 type Finding struct {
-	ID             string   `json:"id"`
-	Severity       Severity `json:"severity"`
-	Category       string   `json:"category"`
-	Issue          string   `json:"issue"`
-	Recommendation string   `json:"recommendation"`
-	BasisRefs      []string `json:"basis_refs"`
+	ID             string      `json:"id"`
+	Kind           FindingKind `json:"kind"`
+	Severity       Severity    `json:"severity"`
+	Category       string      `json:"category"`
+	Issue          string      `json:"issue"`
+	Recommendation string      `json:"recommendation"`
+	BasisRefs      []string    `json:"basis_refs"`
+	AnchorRef      string      `json:"anchor_ref,omitempty"`
 }
 
 // Output limits from the frozen contract.
@@ -45,8 +79,9 @@ const (
 	// MaxFindingsPerRole is the maximum number of findings one role may return.
 	MaxFindingsPerRole = 15
 	// MinBasisRefsPerFinding / MaxBasisRefsPerFinding bound each finding's citations.
-	MinBasisRefsPerFinding = 1
-	MaxBasisRefsPerFinding = 5
+	MinBasisRefsPerFinding  = 1
+	MaxBasisRefsPerFinding  = 5
+	MaxAnchorRefsPerFinding = 1
 	// MaxIssueChars and MaxRecommendationChars bound the prose fields.
 	MaxIssueChars          = 1000
 	MaxRecommendationChars = 1000

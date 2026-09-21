@@ -87,6 +87,28 @@ func TestBadJSONThenValidRepairUsesFormatRepair(t *testing.T) {
 	}
 }
 
+// V2 schema error (bad kind) triggers format repair; repaired body succeeds.
+func TestBadKindThenValidRepairUsesFormatRepair(t *testing.T) {
+	badKindBody := mkResult(`{"id":"F-1","kind":"omission","severity":"high","category":"c","issue":"i","recommendation":"r","basis_refs":["R-1"]}`)
+	out, fake := runOnce(t, script(
+		fake.ScriptedCall{Body: badKindBody},
+		fake.ScriptedCall{Body: validBody()},
+	), Budget{})
+
+	if out.Status != domain.RoleComplete {
+		t.Fatalf("status = %s, want complete (category %s)", out.Status, out.ErrorCategory)
+	}
+	if out.CallCount != 2 || fake.CallCount(domain.RoleRequirements) != 2 {
+		t.Errorf("calls = %d, want 2", out.CallCount)
+	}
+	if out.LastPurpose != domain.PurposeFormatRepair {
+		t.Errorf("purpose = %s, want format_repair", out.LastPurpose)
+	}
+	if len(out.Findings) != 1 {
+		t.Errorf("findings = %d, want 1", len(out.Findings))
+	}
+}
+
 // AC-10: a retry was already used, so malformed output on call 2 fails with no
 // third call.
 func TestRetryThenMalformedFailsWithoutAThirdCall(t *testing.T) {
