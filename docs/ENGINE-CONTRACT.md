@@ -180,6 +180,38 @@ This slice still maps no `evidence.UnitKind` (M2-1c), declares no splitter
 version (M2-1d), builds no `evidence.Snapshot` (M2-1e), and adds no HTTP wiring
 (M2-1f), so the HTTP nil-snapshot blocker above stays open.
 
+### Evidence kind mapping (M2-1c)
+
+Package `internal/ingest` pairs each identified block with the `evidence.UnitKind`
+that `evidence.Freeze` will require later:
+
+- `MapBlockKind(k BlockKind) evidence.UnitKind` maps one structural block kind to
+  its evidence kind. It is a pure total function keyed only on the block kind: it
+  never inspects `Block.Text`, so no text parsing, regex, keyword matching, or
+  author-ID reading participates in the mapping.
+- The mapping is fixed and deterministic: `heading` maps to `brief`, `paragraph`
+  and `list_item` map to `requirement`, `table_row` maps to `data_rule`, and
+  `code` maps to `constraint`. The mapping need not be injective, and two block
+  kinds mapping to `requirement` is correct.
+- `component` and `flow` are intentionally never produced by this structural
+  mapping, because separating either from prose requires semantic classification
+  that v1 ingestion does not perform; every kind this slice does produce is a
+  valid `UnitKind`.
+- Any other block kind maps to the empty `UnitKind` `""`, which
+  `IsValidUnitKind` rejects. `ParseBlocks` never emits such a value, so this
+  default is defensive only.
+- `AssignKinds(blocks []IdentifiedBlock) []KindedBlock` returns `(ID, Kind,
+  Block)` triples in input order; `out[i].ID` and `out[i].Block` are the input
+  values unchanged, so input is never mutated or aliased.
+- The functions are pure: no clock, filesystem, network, randomness, or
+  map-iteration order. Empty input returns a non-nil empty slice
+  `[]KindedBlock{}`.
+
+This slice maps kinds only: it builds no `evidence.Unit`, calls no
+`evidence.Freeze`, builds no `evidence.Snapshot` (M2-1e), declares no splitter
+version (M2-1d), and adds no HTTP wiring (M2-1f), so the HTTP nil-snapshot
+blocker above stays open.
+
 ### SQLite connection foundation
 
 Package `internal/storage/sqlite` provides the verified pure-Go SQLite connection foundation:
