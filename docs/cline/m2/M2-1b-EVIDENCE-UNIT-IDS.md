@@ -121,8 +121,12 @@ For each block, in input order:
    suffix). Collision resolution is deterministic and depends only on input
    order.
    - Example: two blocks both yielding base `REQ-12` become `REQ-12` then
-     `REQ-12-2`. A later block that literally is `REQ-12-2` in the input would
-     then become `REQ-12-2-2`, and so on — always the smallest free integer.
+     `REQ-12-2`. If a third block also yields base `REQ-12`, the suffix search
+     skips any already-taken value: `REQ-12`, `REQ-12-2`, `REQ-12-3`.
+   - Note: a block whose text literally starts `REQ-12-2` is NOT an author ID
+     (the char after the digits is a hyphen, not an allowed boundary per rule 1),
+     so it takes a generated `u<order>` base, not `REQ-12-2`. The collision
+     suffix `-2`/`-3` is only ever produced by this rule, never read from input.
 
 4. **Non-empty guarantee.** Every assigned ID is non-empty (guaranteed by the
    `u<order>` fallback). Empty input returns a non-nil empty slice
@@ -145,8 +149,10 @@ covering at least:
 - blocks with no author ID get `u0`, `u1`, ... matching their `Order`;
 - two blocks with the same author base `REQ-12` → `REQ-12`, `REQ-12-2`;
 - three-way collision → base, `-2`, `-3`;
-- an input block literally starting `REQ-12-2` after a `REQ-12` and another
-  `REQ-12` collides deterministically to `REQ-12-2-2` (smallest free integer);
+- an input block literally starting `REQ-12-2` is NOT an author ID (hyphen after
+  digits is not a boundary) and takes a generated `u<order>` ID;
+- smallest-free-integer suffix: three blocks yielding base `REQ-1` produce
+  `REQ-1`, `REQ-1-2`, `REQ-1-3` (the search skips the taken `-2`);
 - generated-ID collision is impossible for distinct Orders but assert `u0`.. are
   unique on a mixed document;
 - order preservation: `out[i].Block` deep-equals `in[i]` for a multi-kind input;
