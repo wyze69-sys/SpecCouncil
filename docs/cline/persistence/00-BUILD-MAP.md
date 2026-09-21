@@ -148,7 +148,7 @@ otherwise independent of each other.
 | M2-1 | Deterministic evidence ingestion | W7, P4 | product | DONE (`66267bd`, verified) — sub-slices 1a `3a8ca42` / 1b `4cfc40a` / 1c `470759d` / 1d `8b0c5cf` / 1e `71d78f2` / 1f `66267bd` |
 | M2-2 | Stronger finding/citation contract | M2-1 | product | DONE (`84affd4`, verified) — M2-2a `839a6be` / M2-2b `aa73f9c` / M2-2c `84affd4`; optional M2-2d (repair-prompt) deferred to before M2-4 |
 | M2-3 | One safe real-provider adapter | M2-2 | product | DONE (`0771c10`, verified) — Cline adapter (`internal/provider/cline`), model `deepseek/deepseek-v4.1-flash`; unit tests network-free, live smoke re-run green by Hermes (tokens in 37/out 19); frozen interface intact |
-| M2-4 | Four-arm review benchmark | M2-3 | validation | IN PROGRESS — M2-4a harness+scoring DONE (`87960d2`, verified, fake-only $0; isolated from product, cost-guard refuses live without -i-accept-cost); M2-4b live paid runs deferred behind cost cap + go-ahead |
+| M2-4 | Four-arm review benchmark | M2-3 | validation | IN PROGRESS — M2-4a harness+scoring DONE (`87960d2`, verified, fake-only $0; isolated from product, cost-guard refuses live without -i-accept-cost); M2-4b packet released (`docs/cline/m2/M2-4b-LIVE-BENCHMARK-RUN.md`) — live run behind $3.00 hard cap + transport retry; worker builds wiring, Hermes runs the paid call supervised |
 | M2-5 | Concierge change-review experiment | M2-3 | validation | NOT STARTED |
 
 Only M2-1 gets an executable packet first. Later packets are written after the
