@@ -548,3 +548,16 @@ SpecCouncil must not claim that a design or implementation is correct or secure,
 that code matches a design, that a release is ready, that zero findings means no
 issues, or that findings are reproducible across runs. `complete` is an execution
 status, not human approval or a quality verdict.
+
+## Splitter version (M2-1d)
+
+The deterministic ingestion algorithm is identified by a single string version,
+exposed as `ingest.SplitterVersion` with the accessor `ingest.Splitter()`. Its
+value is the plain monotonic identifier `"1"`: not semver, not a date, not a git
+hash. It is bumped by editing that one constant only when ingestion output
+changes for the same input.
+
+The version is metadata recorded beside a snapshot. It is not an input to
+`evidence.Freeze` and is not part of the snapshot content hash, which continues
+to cover evidence units sorted by unit ID. Recording the version on a snapshot is
+a later slice; this note freezes the constant and its accessor only.
