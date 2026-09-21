@@ -112,10 +112,13 @@ environment. Never rewrite a blocked race gate as PASS.
 | W1–W6 | Worker execution, dispatch, lock, one-attempt supervisor | through `daec080` |
 | W7 | HTTP/API composition boundary | `ec33dcb` |
 
-**Known open blocker carried into M2:** HTTP submit can reach real
-`sqlite.Submit` without a constructed frozen snapshot. `SnapshotProvider` is
-optional; when nil, `SubmitParams.Snapshot` is empty and SQLite returns
-`ErrNilSnapshot`. M2-1 (deterministic evidence ingestion) is the approved fix.
+**Blocker carried into M2 — CLOSED by M2-1f (`66267bd`, verified):** HTTP submit
+could reach real `sqlite.Submit` without a constructed frozen snapshot;
+`SnapshotProvider` was optional, so when nil `SubmitParams.Snapshot` was empty and
+SQLite returned `ErrNilSnapshot`. `api.NewIngestSnapshotProvider()` now builds a
+deterministic frozen snapshot from submitted content, so the provider supplies a
+non-empty snapshot and the blocker no longer occurs (proven via the api handler
+tests). Remaining: wire the provider in `cmd/` service composition (deferred).
 
 ## M2 DAG
 
@@ -142,7 +145,7 @@ otherwise independent of each other.
 
 | Slice | Deliverable | Depends on | Type | Status |
 |---|---|---|---|---|
-| M2-1 | Deterministic evidence ingestion | W7, P4 | product | NOT STARTED |
+| M2-1 | Deterministic evidence ingestion | W7, P4 | product | DONE (`66267bd`, verified) — sub-slices 1a `3a8ca42` / 1b `4cfc40a` / 1c `470759d` / 1d `8b0c5cf` / 1e `71d78f2` / 1f `66267bd` |
 | M2-2 | Stronger finding/citation contract | M2-1 | product | NOT STARTED |
 | M2-3 | One safe real-provider adapter | M2-2 | product | NOT STARTED |
 | M2-4 | Four-arm review benchmark | M2-3 | validation | NOT STARTED |
