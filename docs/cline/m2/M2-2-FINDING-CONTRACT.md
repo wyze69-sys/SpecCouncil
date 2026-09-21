@@ -62,7 +62,7 @@ anything that ranks findings by model confidence.
 | Slice | Scope | Depends on |
 |---|---|---|
 | **M2-2a** | `internal/domain` contract + `internal/review` validation and prompt + every provider-response fixture that must now carry `kind` | M2-1 (done) |
-| **M2-2b** | Persistence: migration `006` (`findings.kind`, `findings.anchor_unit_id`), publish validation + insert, read/compose reconstruction, report ordering fallback to the anchor | M2-2a |
+| **M2-2b** | Persistence: migration `007` (`findings.kind`, `findings.anchor_unit_id`), publish validation + insert, read/compose reconstruction, report ordering fallback to the anchor — packet `docs/cline/m2/M2-2b-PERSISTENCE.md` | M2-2a ✅ |
 | **M2-2c** | End-to-end proof (fake provider → worker → SQLite → report), contract docs, independent test round | M2-2b |
 | **M2-2d** (optional, before M2-4) | Format-repair prompt that names the validation errors | M2-2c |
 
@@ -94,6 +94,41 @@ arms look worse than they are in the M2-4 benchmark.
 Recommendation: a small follow-on slice **M2-2d** that builds a repair prompt naming
 the validation errors, keeping the same two-call budget and the XOR rule. Not part of
 M2-2a; decide before M2-4.
+
+## M2-2a verification (2026-09-21) — ACCEPTED
+
+Implemented by the worker at `839a6be` ("Add finding kind and omission anchor
+contract"), changed paths exactly the packet's allowed list.
+
+Independently re-run by the coordinator on the current tree:
+
+- `gofmt -l .` empty; `go vet ./...` clean.
+- `go test ./internal/domain ./internal/review -count=10` ok; every new test
+  present and passing (`TestIsValidFindingKind`, `TestBasisRefsBounds`,
+  `TestMaxAnchorRefsPerFindingConstant`, `TestFindingContractV2Validation` with all
+  twelve sub-cases, `TestBadKindThenValidRepairUsesFormatRepair`).
+- `go test ./... -count=1` green across all packages (api, domain, evidence,
+  ingest, review, storage/sqlite, worker).
+- `go run ./cmd/speccouncil` exits 0 with status `complete`, four complete roles,
+  and four findings — the demo still works with the v2 bodies.
+- Grep confirms every test-side and `cmd/` JSON body containing `basis_refs` also
+  carries `kind`.
+- Adversarial probes beyond the packet: a `missing` finding whose anchor duplicates
+  one of its own refs is accepted (intended); `conflicting` with 6 refs is rejected
+  by the kind-aware bound; whitespace-only and uppercase kinds are rejected; a
+  padded anchor (`" R-1 "`) is rejected as not-in-snapshot; the legacy
+  `MinBasisRefsPerFinding`/`MaxBasisRefsPerFinding` constants are unchanged, so
+  `publish.go` and `read.go` still compile against them.
+- **Report defect corrected:** the worker reported the race gate as
+  `UNKNOWN/BLOCKED (no cgo compiler in Windows or WSL Ubuntu)`. That is wrong —
+  WSL Ubuntu has gcc 13.3 and Go 1.27.1 at `~/sdk/go/bin`. Re-run by the verifier:
+  `go test -race ./internal/domain ./internal/review -count=1` → both `ok`, exit 0.
+  The real cause of the worker's blocker was `go` not being on WSL's default PATH.
+
+Known intermediate inconsistency, owned by M2-2b/M2-2c: `docs/ENGINE-CONTRACT.md`
+still states the unconditional "1–5 basis refs" rule (lines 81, 343), and its
+schema/ordering sections do not yet mention `kind`, `anchor_unit_id`, or the anchor
+tiebreak. It must be updated before M2-2 is declared complete.
 
 ## M2-2a — executable packet (decisions above applied)
 
