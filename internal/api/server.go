@@ -13,6 +13,7 @@ import (
 
 	"github.com/wyze69-sys/SpecCouncil/internal/domain"
 	"github.com/wyze69-sys/SpecCouncil/internal/evidence"
+	"github.com/wyze69-sys/SpecCouncil/internal/ingest"
 	"github.com/wyze69-sys/SpecCouncil/internal/review"
 	"github.com/wyze69-sys/SpecCouncil/internal/storage/sqlite"
 )
@@ -338,6 +339,10 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request, projectID 
 	if s.snapshotProvider != nil {
 		snap, err := s.snapshotProvider(r.Context(), projectID, *req.Title, *req.Content)
 		if err != nil {
+			if errors.Is(err, ingest.ErrNoEvidenceUnits) {
+				writeError(w, http.StatusBadRequest, "bad_request", "content produced no reviewable evidence")
+				return
+			}
 			s.handlePersistenceError(w, err)
 			return
 		}

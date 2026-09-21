@@ -477,18 +477,19 @@ Package `internal/api` provides an implemented and independently tested
 - `No worker or provider invocation from HTTP`: the API layer never claims work, dispatches roles, calls providers, or composes reports directly.
 - `No concrete auth/account system yet`: authentication and authorization interfaces accept injectable adapters; user accounts, passwords, JWTs, OAuth, and authorization storage are deferred.
 
-#### HTTP production-submission blocker
+#### HTTP production-submission blocker (CLOSED — M2-1f)
 
-The HTTP route contract is tested through injected store seams, but successful
-production submission through a real `*sqlite.Store` is not complete. The server
-accepts raw `content`; SQLite requires a valid non-empty frozen snapshot; and the
-optional `SnapshotProvider` may be nil, leaving `SubmitParams.Snapshot` empty and
+The HTTP route contract originally had an open composition blocker: the server
+accepted raw `content` while SQLite required a valid non-empty frozen snapshot, and
+the optional `SnapshotProvider` could be nil, leaving `SubmitParams.Snapshot` empty and
 causing `sqlite.Submit` to reject the request with `ErrNilSnapshot`.
 
-This is a composition blocker, not evidence that routing, authorization, or HTTP
-error mapping is absent. Its repair is intentionally held until M2 freezes the
-deterministic evidence-ingestion contract. Fake-store handler tests do not prove
-this real-store path.
+This blocker is CLOSED in M2-1f: `api.NewIngestSnapshotProvider` adapts
+`ingest.BuildSnapshot` to provide a deterministically constructed frozen snapshot
+from `(projectID, title, content)`. When configured, `SubmitParams.Snapshot` is
+populated and `sqlite.Submit` receives a valid, re-verifiable frozen snapshot. Input
+producing no evidence units (`ingest.ErrNoEvidenceUnits`) maps directly to HTTP 400
+`bad_request`.
 
 ## Approved M2 validation scope
 
@@ -571,3 +572,13 @@ hashing is unchanged. Zero parsed blocks return `ingest.ErrNoEvidenceUnits`
 before freezing. Other Freeze errors are wrapped with `%w`, and every error
 returns a zero `IngestResult`; whitespace-only code units are not repaired or
 filtered. HTTP submission wiring remains for M2-1f.
+
+## HTTP snapshot wiring (M2-1f)
+
+`api.NewIngestSnapshotProvider()` returns an `api.SnapshotProvider` that builds a
+frozen evidence snapshot using `ingest.BuildSnapshot`. The snapshot ID is
+derived deterministically as `"snap-" + hex(sha256(projectID || 0x00 || title || 0x00 || content))`.
+The HTTP submit handler wires this provider and maps `ingest.ErrNoEvidenceUnits`
+to HTTP 400 (`bad_request`). When the provider is configured, `sqlite.Submit`
+receives a non-empty, re-verifiable frozen snapshot, closing the nil-snapshot
+blocker.
