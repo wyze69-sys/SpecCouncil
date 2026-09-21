@@ -62,7 +62,7 @@ anything that ranks findings by model confidence.
 | Slice | Scope | Depends on |
 |---|---|---|
 | **M2-2a** | `internal/domain` contract + `internal/review` validation and prompt + every provider-response fixture that must now carry `kind` | M2-1 (done) |
-| **M2-2b** | Persistence: migration `007` (`findings.kind`, `findings.anchor_unit_id`), publish validation + insert, read/compose reconstruction, report ordering fallback to the anchor — packet `docs/cline/m2/M2-2b-PERSISTENCE.md` | M2-2a ✅ |
+| **M2-2b** | Persistence: migration `007` (`findings.kind`, `findings.anchor_unit_id`), publish validation + insert, read/compose reconstruction, report ordering fallback to the anchor — packet `docs/cline/m2/M2-2b-PERSISTENCE.md` — DONE (`aa73f9c`, verified) | M2-2a ✅ |
 | **M2-2c** | End-to-end proof (fake provider → worker → SQLite → report), contract docs, independent test round | M2-2b |
 | **M2-2d** (optional, before M2-4) | Format-repair prompt that names the validation errors | M2-2c |
 

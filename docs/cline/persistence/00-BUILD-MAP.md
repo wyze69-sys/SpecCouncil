@@ -146,7 +146,7 @@ otherwise independent of each other.
 | Slice | Deliverable | Depends on | Type | Status |
 |---|---|---|---|---|
 | M2-1 | Deterministic evidence ingestion | W7, P4 | product | DONE (`66267bd`, verified) — sub-slices 1a `3a8ca42` / 1b `4cfc40a` / 1c `470759d` / 1d `8b0c5cf` / 1e `71d78f2` / 1f `66267bd` |
-| M2-2 | Stronger finding/citation contract | M2-1 | product | IN PROGRESS — M2-2a DONE (`839a6be`, verified); M2-2b packet released (`docs/cline/m2/M2-2b-PERSISTENCE.md`) |
+| M2-2 | Stronger finding/citation contract | M2-1 | product | IN PROGRESS — M2-2a DONE (`839a6be`); M2-2b DONE (`aa73f9c`, verified); M2-2c next (e2e + ENGINE-CONTRACT doc update) |
 | M2-3 | One safe real-provider adapter | M2-2 | product | NOT STARTED |
 | M2-4 | Four-arm review benchmark | M2-3 | validation | NOT STARTED |
 | M2-5 | Concierge change-review experiment | M2-3 | validation | NOT STARTED |
