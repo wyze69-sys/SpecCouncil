@@ -147,7 +147,7 @@ otherwise independent of each other.
 |---|---|---|---|---|
 | M2-1 | Deterministic evidence ingestion | W7, P4 | product | DONE (`66267bd`, verified) — sub-slices 1a `3a8ca42` / 1b `4cfc40a` / 1c `470759d` / 1d `8b0c5cf` / 1e `71d78f2` / 1f `66267bd` |
 | M2-2 | Stronger finding/citation contract | M2-1 | product | DONE (`84affd4`, verified) — M2-2a `839a6be` / M2-2b `aa73f9c` / M2-2c `84affd4`; optional M2-2d (repair-prompt) deferred to before M2-4 |
-| M2-3 | One safe real-provider adapter | M2-2 | product | NOT STARTED |
+| M2-3 | One safe real-provider adapter | M2-2 | product | PACKET RELEASED (`docs/cline/m2/M2-3-CLINE-PROVIDER.md`) — Cline adapter, model `deepseek/deepseek-v4.1-flash`, live smoke test passed |
 | M2-4 | Four-arm review benchmark | M2-3 | validation | NOT STARTED |
 | M2-5 | Concierge change-review experiment | M2-3 | validation | NOT STARTED |
 

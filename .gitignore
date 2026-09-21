@@ -20,6 +20,7 @@ go.work.sum
 *.local
 /var/
 /data/
+/.secrets/
 
 # Editor / OS
 .idea/
