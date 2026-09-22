@@ -91,7 +91,7 @@ Replace the M2-4a placeholder block (the `// M2-4b: wire live Cline provider her
 error) with:
 
 1. Read key (as above). 2. Build `cline.New(cline.Config{BaseURL:
-"https://api.cline.bot/api/v1", APIKey: key, Model: "deepseek/deepseek-v4.1-flash",
+"https://api.cline.bot/api/v1", APIKey: <key>, Model: "cline-pass/deepseek-v4.1-flash",
 Timeout: 60s, MaxTokens: 1024})`. 3. Enforce the cost cap. 4. Run the benchmark with
 the real provider. 5. On completion, write outputs to disk (below). The `fake`
 default path stays byte-for-byte unchanged.

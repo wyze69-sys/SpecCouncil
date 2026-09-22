@@ -105,7 +105,9 @@ func run(snapshotPath, scriptPath, sessionID, chosenProvider string) error {
 		clineProv, err := cline.New(cline.Config{
 			BaseURL: "https://api.cline.bot/api/v1",
 			APIKey:  apiKey,
-			Model:   "deepseek/deepseek-v4.1-flash",
+			// cline-pass/ prefix = ClinePass subscription; bare deepseek/ = metered
+			// pay-as-you-go that drains prepaid credits (verified live, 402).
+			Model: "cline-pass/deepseek-v4.1-flash",
 		})
 		if err != nil {
 			return fmt.Errorf("init cline provider: %w", err)

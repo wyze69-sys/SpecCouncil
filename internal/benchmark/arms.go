@@ -71,6 +71,13 @@ func newCountingProvider(p provider.Provider, limit int) *countingProvider {
 const (
 	ClinePricePerInputTokenUSD  = 0.00000055
 	ClinePricePerOutputTokenUSD = 0.00000219
+	// EstimatedRealisticOutputTokensPerCall is the per-call completion-token count
+	// used for the pre-run cost estimate. A live full review call to
+	// deepseek-v4.1-flash measured ~7400 completion tokens (6308 reasoning + ~1000
+	// content); 8000 adds margin. The max_tokens ceiling is set far higher only to
+	// avoid starving the model — billing is per generated token, so the estimate
+	// must reflect realistic generation, not the ceiling.
+	EstimatedRealisticOutputTokensPerCall = 8000
 )
 
 func (cp *countingProvider) Call(ctx context.Context, req provider.Request) (provider.Response, error) {
@@ -236,6 +243,17 @@ func EstimateLiveCost(cases []Case, repeats int, maxTokens int) (float64, int) {
 	if maxTokens <= 0 {
 		maxTokens = 1024
 	}
+	// Billing is per token ACTUALLY generated, not the max_tokens ceiling. A live
+	// full review call measured ~7400 completion tokens (6308 reasoning + ~1000
+	// content). Estimate from a realistic per-call output, capped by maxTokens
+	// (a call can never emit more than the cap). This keeps the estimate honest
+	// (~$0.30 for 60 calls) instead of a ceiling-based figure that scales with a
+	// deliberately generous maxTokens and would falsely trip the cost guard.
+	estOut := EstimatedRealisticOutputTokensPerCall
+	if maxTokens < estOut {
+		estOut = maxTokens
+	}
+	maxTokens = estOut
 
 	var totalCost float64
 	var totalCalls int

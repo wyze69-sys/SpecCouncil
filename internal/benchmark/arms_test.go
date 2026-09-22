@@ -236,7 +236,12 @@ func TestArmProviderRejectedNotRetriedRunStops(t *testing.T) {
 
 func TestTokenBasedEstimateUnderDefaultCap(t *testing.T) {
 	cases := DefaultCases()
-	estCost, totalCalls := EstimateLiveCost(cases, 3, 1024)
+	// 32000 = the benchmark's DefaultMaxTokens (a reasoning model needs headroom
+	// to reason AND emit findings; small caps yield empty-content HTTP 500s). The
+	// estimate is NOT ceiling-based: it uses the realistic per-call output
+	// (EstimatedRealisticOutputTokensPerCall=8000), so a generous ceiling does not
+	// inflate the estimate.
+	estCost, totalCalls := EstimateLiveCost(cases, 3, 32000)
 
 	// 2 cases * 3 repeats * 10 calls/repeat = 60 calls
 	if totalCalls != 60 {
@@ -245,8 +250,10 @@ func TestTokenBasedEstimateUnderDefaultCap(t *testing.T) {
 	if estCost <= 0.0 {
 		t.Errorf("expected estimate > 0.0; got $%.4f", estCost)
 	}
-	if estCost >= 0.50 {
-		t.Errorf("expected estimate < $0.50 default cap; got $%.4f", estCost)
+	// Padded estimate (8000 output tokens/call) must stay under the $1.50 default
+	// cap so the live run is not falsely refused; real spend is far lower.
+	if estCost >= 1.50 {
+		t.Errorf("expected estimate < $1.50 default cap; got $%.4f", estCost)
 	}
 	t.Logf("60-call token-based estimate: $%.4f for %d calls", estCost, totalCalls)
 }

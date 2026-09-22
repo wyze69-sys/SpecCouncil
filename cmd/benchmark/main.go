@@ -15,9 +15,20 @@ import (
 )
 
 const (
-	DefaultMaxCost   = 0.50
-	HardCostCeiling  = 3.00
-	DefaultMaxTokens = 1024
+	// Default cap $1.50. Real measured spend for a full review call is ~$0.0044,
+	// so 60 calls ≈ $0.27. The pre-run estimate uses a padded 8000 output tokens/
+	// call (~$1.06 for 60 calls) to err high, so the cap sits above that padded
+	// figure. Hard ceiling stays $3.00 as the absolute safety net.
+	DefaultMaxCost  = 1.50
+	HardCostCeiling = 3.00
+	// deepseek-v4.1-flash is a reasoning model: it spends output tokens on internal
+	// reasoning BEFORE emitting content (a live call measured 6308 reasoning + ~1000
+	// content = ~7400 completion tokens). A small max_tokens cap is consumed by
+	// reasoning alone, leaving no content, so the gateway returns HTTP 500 "empty
+	// response content" (seen at 1024 and 6000) or truncated JSON. Billing is per
+	// token ACTUALLY generated, not the cap, so a high cap costs nothing extra; it
+	// only prevents starvation. 32000 leaves ample room to reason AND emit findings.
+	DefaultMaxTokens = 32000
 )
 
 func main() {
@@ -73,9 +84,13 @@ func main() {
 		}
 
 		clineProv, err := cline.New(cline.Config{
-			BaseURL:   "https://api.cline.bot/api/v1",
-			APIKey:    apiKey,
-			Model:     "deepseek/deepseek-v4.1-flash",
+			BaseURL: "https://api.cline.bot/api/v1",
+			APIKey:  apiKey,
+			// cline-pass/ prefix routes to the ClinePass subscription quota.
+			// The bare deepseek/ id routes to metered pay-as-you-go and drains
+			// prepaid credits — verified live (402 insufficient_credits). Keep the
+			// prefix so runs are covered by the flat subscription.
+			Model:     "cline-pass/deepseek-v4.1-flash",
 			Timeout:   60 * time.Second,
 			MaxTokens: DefaultMaxTokens,
 		})
@@ -94,17 +109,28 @@ func main() {
 			benchmark.ArmGeneric,
 		}
 
+		// fatalErr holds a run-aborting error (e.g. provider_rejected: bad auth,
+		// unknown model, insufficient_credits). On such an error we STOP making
+		// further paid calls but still persist everything already collected — a
+		// prior version exited immediately and discarded results that cost real
+		// money. Partial output is written, then the process exits non-zero.
+		var fatalErr error
+	runLoop:
 		for _, c := range cases {
 			for _, arm := range arms {
 				runs := make([]benchmark.RunResult, 0, *repeatsFlag)
 				for repeat := 1; repeat <= *repeatsFlag; repeat++ {
 					res, err := benchmark.ExecuteArm(ctx, clineProv, arm, c, repeat)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "benchmark run failed: execute arm %s on case %s repeat %d failed: %v\n", arm, c.ID, repeat, err)
-						os.Exit(1)
-					}
+					// Record the partial RunResult (it carries the captured error
+					// and any cost) before deciding whether to abort.
 					runs = append(runs, res)
 					allRuns = append(allRuns, res)
+					if err != nil {
+						fatalErr = fmt.Errorf("execute arm %s on case %s repeat %d failed: %w", arm, c.ID, repeat, err)
+						score := benchmark.AggregateArm(arm, c, runs)
+						scores = append(scores, score)
+						break runLoop
+					}
 				}
 				score := benchmark.AggregateArm(arm, c, runs)
 				scores = append(scores, score)
@@ -135,6 +161,11 @@ func main() {
 		compPath := filepath.Join(*outFlag, fmt.Sprintf("comparison-%s.md", utcStamp))
 		if err := os.WriteFile(compPath, []byte(report), 0644); err != nil {
 			fmt.Fprintf(os.Stderr, "error: write comparison report to %s: %v\n", compPath, err)
+			os.Exit(1)
+		}
+
+		if fatalErr != nil {
+			fmt.Fprintf(os.Stderr, "benchmark run aborted after a fatal error; PARTIAL results saved to %s and %s: %v\n", runPath, compPath, fatalErr)
 			os.Exit(1)
 		}
 

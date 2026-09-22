@@ -24,8 +24,14 @@ Build to them exactly:
 
 1. Auth is a bearer token: header `Authorization: Bearer <key>`. `GET /models`
    returned HTTP 200 with the key, proving the key and base URL.
-2. The correct model id is **`deepseek/deepseek-v4.1-flash`** (there is NO
-   `cline-pass/` prefix — that is a routing label, not the API model id).
+2. The model id is **`cline-pass/deepseek-v4.1-flash`**. CORRECTION: an earlier
+   version of this doc said to drop the prefix and use `deepseek/deepseek-v4.1-flash`.
+   That was WRONG and costly. Verified live: the `cline-pass/` prefix routes to the
+   ClinePass subscription (covered by the flat pass), while the bare
+   `deepseek/deepseek-v4.1-flash` id routes to metered pay-as-you-go and drains
+   prepaid credits (returns HTTP 402 insufficient_credits when credits are empty,
+   even though the ClinePass call at the same instant returns 200). Always use the
+   `cline-pass/` prefix. The bare id appears in `GET /models` but bills differently.
 3. **The success body is NOT standard OpenAI shape.** The choices are nested under
    a top-level `data` key, and there is a `provider_metadata` cost block:
    ```json
